@@ -303,20 +303,8 @@ class OnPolicyKDTrainer:
     
     @staticmethod
     def _collate_values(key: str, values: list):
-        """Collate a list of per-sample values into a single micro-batch value.
-        
-        Rules:
-        - mm_* tensors       → torch.cat (variable patch counts across images)
-        - scalar tensors     → torch.cat (metrics like response_length)
-        - sequence tensors   → zero_pad_sequences (pad variable-length sequences)
-        - lists              → flatten
-        - None               → keep None
-        - scalars            → collect into list
-        """
         v0 = values[0]
         if isinstance(v0, torch.Tensor):
-            if key.startswith("mm_"):
-                return torch.cat(values, dim=0)
             return zero_pad_sequences(values, side="right", value=0)
         if isinstance(v0, list):
             return sum(values, [])
@@ -381,11 +369,12 @@ class OnPolicyKDTrainer:
             f"{prefix}_attn_mask": attn_mask,
             f"{prefix}_loss_mask": loss_mask,
         }
-        # Extract multimodal fields (e.g., pixel_values, image_grid_thw)
-        for k, v in full_tok.items():
-            if k not in ("input_ids", "attention_mask"):
-                v = torch.as_tensor(v)
-                result[f"mm_{k}"] = v.squeeze(0) if v.dim() > 2 else v
+        multi_modal_inputs = {
+            k: torch.as_tensor(v) for k, v in full_tok.items()
+            if k not in ("input_ids", "attention_mask", "mm_token_type_ids")
+        }
+        if multi_modal_inputs:
+            result[f"_{prefix}_multi_modal_inputs"] = multi_modal_inputs
 
         return result
 
@@ -423,7 +412,6 @@ class OnPolicyKDTrainer:
                 tea_prompt, response_text, self.teacher_processor, "tea", images=images
             )
         else:
-            # Same tokenizer: reuse student tensors (mm_ fields already in stu_tokens)
             tea_tokens = {
                 "tea_input_ids": stu_tokens["stu_input_ids"].clone(),
                 "tea_attn_mask": stu_tokens["stu_attn_mask"].clone(),
@@ -438,8 +426,8 @@ class OnPolicyKDTrainer:
         tea_full_text = tea_prompt + response_text + " " + tokenizer.eos_token
 
         sample = {
-            **tea_tokens,
-            **stu_tokens,
+            **{k: v for k, v in tea_tokens.items() if not k.startswith("_")},
+            **{k: v for k, v in stu_tokens.items() if not k.startswith("_")},
             "tea_full_texts": [tea_full_text],
             "rollout_log_probs": None,
             "stu_prompts": [stu_prompt],
@@ -449,6 +437,9 @@ class OnPolicyKDTrainer:
             "response_length": torch.FloatTensor([[response_length]]),
             "total_length": torch.FloatTensor([[total_length]]),
         }
+        stu_mm = stu_tokens.get("_stu_multi_modal_inputs")
+        if stu_mm is not None:
+            sample["stu_multi_modal_inputs"] = [stu_mm]
         if images:
             sample["images"] = [images]
         return sample

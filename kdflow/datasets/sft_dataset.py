@@ -4,7 +4,7 @@ import torch
 from torch.utils.data import Dataset
 from PIL import Image
 
-from kdflow.datasets.utils import convert_to_openai_messages, get_tokenizer_or_processor
+from kdflow.datasets.utils import convert_to_openai_messages, get_tokenizer_or_processor, zero_pad_sequences
 from kdflow.models.utils import TokenizerCompareResult
 
 class SFTDataset(Dataset):
@@ -52,12 +52,16 @@ class SFTDataset(Dataset):
             self.args.model.student_name_or_path, 
             need_processor=self.image_key is not None,
         )
+        # extract tokenizer in hf processor
+        self.student_tokenizer = getattr(self.student_processor, "tokenizer", self.student_processor)
         self.teacher_processor = None
+        self.teacher_tokenizer = None
         if self.args.model.teacher_name_or_path is not None:
             self.teacher_processor = get_tokenizer_or_processor(
                 self.args.model.teacher_name_or_path,
                 need_processor=self.image_key is not None,
             )
+            self.teacher_tokenizer = getattr(self.teacher_processor, "tokenizer", self.teacher_processor)
 
         if max_data_num > 0 and max_data_num < len(dataset):
             self.strategy.log(f"Truncating dataset from {len(dataset)} to {max_data_num}")
@@ -101,7 +105,7 @@ class SFTDataset(Dataset):
             data, self.input_template, self.input_key, self.output_key,
             apply_chat_template=stu_chat_template_fn,
         )
-        stu_eos_token = self.get_eos_token(self.student_processor)
+        stu_eos_token = self.student_tokenizer.eos_token
         if not stu_response.endswith(stu_eos_token):
             stu_response += " " + stu_eos_token
 
@@ -123,7 +127,7 @@ class SFTDataset(Dataset):
                     data, self.input_template, self.teacher_input_key, self.output_key,
                     apply_chat_template=tea_chat_template_fn,
                 )
-                tea_eos_token = self.get_eos_token(self.teacher_processor)
+                tea_eos_token = self.teacher_tokenizer.eos_token
                 if not tea_response.endswith(tea_eos_token):
                     tea_response += " " + tea_eos_token
                 result["tea_prompt"] = tea_prompt
@@ -138,9 +142,6 @@ class SFTDataset(Dataset):
 
         return result
     
-    def get_eos_token(self, processor):
-        return processor.tokenizer.eos_token if hasattr(processor, "tokenizer") else processor.eos_token
-
     def preprocess_data(
         self,
         data: Dict,
@@ -199,12 +200,19 @@ class SFTDataset(Dataset):
         tokenizer = processor.tokenizer if hasattr(processor, "tokenizer") else processor
         return len(tokenizer.encode(text, add_special_tokens=False))
 
-    def _encode_batch(self, processor, full_texts, images=None):
-        kwargs = {"text": full_texts, "padding": "longest", "truncation": False,
-                  "max_length": self.max_length, "return_tensors": "pt"}
-        if images is not None:
+    def _encode_single(self, processor, text, images=None) -> Dict[str, Any]:
+        """Single-sample processor call."""
+        kwargs = {"text": [text], "padding": False, "truncation": False,
+                  "return_tensors": "pt"}
+        if images:
             kwargs["images"] = images
-        return processor(**kwargs)
+        enc = processor(**kwargs)
+        skip = {"input_ids", "attention_mask", "mm_token_type_ids"}
+        multi_modal_inputs = {k: v for k, v in enc.items() if k not in skip}
+        return {
+            "input_ids": enc["input_ids"][0],
+            "multi_modal_inputs": multi_modal_inputs or None,
+        }
 
     @staticmethod
     def _build_loss_mask(attn_mask, resp_lens):
@@ -217,40 +225,65 @@ class SFTDataset(Dataset):
         return loss_mask
 
     def collate_fn(self, item_list: List[Dict]) -> Dict[str, torch.Tensor]:
-        stu_full = [item["stu_prompt"] + item["stu_response"] for item in item_list]
-        images = [item["images"] for item in item_list] if self.image_key else None
-
-        stu_enc = self._encode_batch(self.student_processor, stu_full, images)
-
-        batch = {f"mm_{k}": v for k, v in stu_enc.items() if k not in ("input_ids", "attention_mask")}
-        batch["stu_input_ids"] = stu_enc["input_ids"]
-        batch["stu_attn_mask"] = stu_enc["attention_mask"]
-        batch["stu_loss_mask"] = self._build_loss_mask(
-            stu_enc["attention_mask"],
-            [item["stu_resp_len"] for item in item_list],
+        bsz = len(item_list)
+        per_sample_images = (
+            [item["images"] for item in item_list]
+            if self.image_key else [None] * bsz
         )
+
+        stu_full = [item["stu_prompt"] + item["stu_response"] for item in item_list]
+        stu_encs = [
+            self._encode_single(self.student_processor, stu_full[i], per_sample_images[i])
+            for i in range(bsz)
+        ]
+        stu_pad_id = self.student_tokenizer.pad_token_id
+        stu_input_ids = zero_pad_sequences(
+            [e["input_ids"] for e in stu_encs], side="right", value=stu_pad_id,
+        )
+        stu_attn_mask = (stu_input_ids != stu_pad_id).long()
+        stu_loss_mask = self._build_loss_mask(
+            stu_attn_mask, [item["stu_resp_len"] for item in item_list],
+        )
+
+        batch: Dict[str, Any] = {
+            "stu_input_ids": stu_input_ids,
+            "stu_attn_mask": stu_attn_mask,
+            "stu_loss_mask": stu_loss_mask,
+        }
+        if any(e["multi_modal_inputs"] is not None for e in stu_encs):
+            batch["stu_multi_modal_inputs"] = [e["multi_modal_inputs"] for e in stu_encs]
 
         if "tea_prompt" in item_list[0]:
             if not self.teacher_student_share_input:
                 tea_full = [item["tea_prompt"] + item["tea_response"] for item in item_list]
-                tea_enc = self._encode_batch(self.teacher_processor, tea_full, images)
-                batch["tea_input_ids"] = tea_enc["input_ids"]
-                batch["tea_attn_mask"] = tea_enc["attention_mask"]
-                batch["tea_loss_mask"] = self._build_loss_mask(
-                    tea_enc["attention_mask"],
-                    [item["tea_resp_len"] for item in item_list],
+                tea_encs = [
+                    self._encode_single(self.teacher_processor, tea_full[i], per_sample_images[i])
+                    for i in range(bsz)
+                ]
+                tea_pad_id = self.teacher_tokenizer.pad_token_id
+                tea_input_ids = zero_pad_sequences(
+                    [e["input_ids"] for e in tea_encs], side="right", value=tea_pad_id,
                 )
+                tea_attn_mask = (tea_input_ids != tea_pad_id).long()
+                batch["tea_input_ids"] = tea_input_ids
+                batch["tea_attn_mask"] = tea_attn_mask
+                batch["tea_loss_mask"] = self._build_loss_mask(
+                    tea_attn_mask, [item["tea_resp_len"] for item in item_list],
+                )
+                if any(e["multi_modal_inputs"] is not None for e in tea_encs):
+                    batch["tea_multi_modal_inputs"] = [e["multi_modal_inputs"] for e in tea_encs]
             else:
                 batch["tea_input_ids"] = batch["stu_input_ids"]
                 batch["tea_attn_mask"] = batch["stu_attn_mask"]
                 batch["tea_loss_mask"] = batch["stu_loss_mask"]
+                if "stu_multi_modal_inputs" in batch:
+                    batch["tea_multi_modal_inputs"] = batch["stu_multi_modal_inputs"]
 
-        if images is not None:
-            batch["images"] = images
-
-        if "tea_prompt" in item_list[0]:
             batch["tea_full_texts"] = [
                 item["tea_prompt"] + item["tea_response"] for item in item_list
             ]
+
+        if self.image_key:
+            batch["images"] = per_sample_images
 
         return batch

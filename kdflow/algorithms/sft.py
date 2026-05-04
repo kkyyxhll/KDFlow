@@ -18,7 +18,7 @@ class SFT:
         student_loss_mask = micro_batch["stu_loss_mask"].bool()
         avg_token_num = micro_batch["avg_micro_batch_token_num"]
 
-        mm_kwargs = {k[3:]: v for k, v in micro_batch.items() if k.startswith("mm_")}
+        mm_kwargs = micro_batch.get("stu_multi_modal_inputs") or {}
 
         output = self.student(
             student_input_ids,

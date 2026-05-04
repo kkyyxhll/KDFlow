@@ -27,7 +27,7 @@ class VanillaKD:
 
         assert teacher_hiddens is not None, "micro_batch must contain `teacher_hiddens` for KD"
 
-        mm_kwargs = {k[3:]: v for k, v in micro_batch.items() if k.startswith("mm_")}
+        mm_kwargs = micro_batch.get("stu_multi_modal_inputs") or {}
 
         output = self.student(
             student_input_ids,

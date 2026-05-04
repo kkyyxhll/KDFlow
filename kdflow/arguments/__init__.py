@@ -73,12 +73,6 @@ def init_args(scenario: str = "sft"):
             )
             args.model.attn_implementation = "flash_attention_2"
             
-        if args.data.image_key is not None:
-            logger.warning(
-                "--packing_samples is not supported with image data. Disabling packing_samples."
-            )
-            args.data.packing_samples = False
-            
     total_gpus = args.train.num_nodes * args.train.num_gpus_per_node
     
     if scenario == "on_policy_kd":

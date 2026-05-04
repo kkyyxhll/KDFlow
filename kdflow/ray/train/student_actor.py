@@ -24,6 +24,7 @@ from kdflow.utils.distributed_util import stateless_init_process_group, torch_di
 from kdflow.utils.logging_utils import init_logger
 from kdflow.ray.utils import ray_noset_visible_devices
 from kdflow.algorithms import ALGO_DICT
+from kdflow.utils.multimodal_utils import extract_multi_modal_inputs
 
 
 logger = init_logger(__name__)
@@ -167,6 +168,9 @@ class StudentRayActor:
         if self.args.train.enable_sleep:
             self.sleep()
 
+        self.image_token_id = getattr(self.student.model.config, "image_token_id", None)
+        self.video_token_id = getattr(self.student.model.config, "video_token_id", None)
+
         torch_dist_barrier_and_cuda_sync()
         
     def load_only_lm_head(self, model_name_or_path, device="cuda", dtype=torch.bfloat16):
@@ -265,7 +269,21 @@ class StudentRayActor:
                 else v
                 for k, v in batch.items()
             }
-            
+
+            if "stu_multi_modal_inputs" in micro_batch:
+                mm_kwargs = extract_multi_modal_inputs(micro_batch["stu_multi_modal_inputs"])
+                mm_kwargs = {
+                    k: v.to(device, non_blocking=True) if isinstance(v, torch.Tensor) else v
+                    for k, v in mm_kwargs.items()
+                }
+                if mm_kwargs:
+                    input_ids = micro_batch["stu_input_ids"]
+                    mm_token_type_ids = torch.zeros_like(input_ids)
+                    mm_token_type_ids[input_ids == self.image_token_id] = 1
+                    mm_token_type_ids[input_ids == self.video_token_id] = 2
+                    mm_kwargs["mm_token_type_ids"] = mm_token_type_ids
+                micro_batch["stu_multi_modal_inputs"] = mm_kwargs
+
             loss_info = self.kd_algorithm.training_step(micro_batch)
             for key in loss_info:
                 status[key].append(loss_info[key].item())
