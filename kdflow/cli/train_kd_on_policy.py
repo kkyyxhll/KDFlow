@@ -1,3 +1,4 @@
+import os
 import math
 
 import ray
@@ -25,7 +26,7 @@ def train(args):
                     "TOKENIZERS_PARALLELISM": "true",
                     "NCCL_DEBUG": "WARN"
                 },
-                # "working_dir": os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+                "working_dir": os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
             }
         )
     
