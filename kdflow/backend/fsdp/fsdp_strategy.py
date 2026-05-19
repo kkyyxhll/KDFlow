@@ -503,6 +503,7 @@ class FSDP2Strategy(ABC):
     def update_rollout_weights_from_tensor(
         self, model, engine, gather_src, gather_group,
         update_weight_buffer_size=2 * 1024**3,
+        weight_source=None
     ):
         """
         Broadcast FSDP model weights to rollout engine with CUDA IPC + Gloo gather.
@@ -539,6 +540,9 @@ class FSDP2Strategy(ABC):
                 del bucket
                 bucket = []
                 bucket_size = 0
+
+            if weight_source is not None and name in weight_source:
+                param = weight_source[name]
 
             param = param.cuda()
             if isinstance(param, DTensor):

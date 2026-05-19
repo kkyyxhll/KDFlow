@@ -100,6 +100,16 @@ class StudentRayActor:
         self.student = DistillModel(strategy)
         self.student = strategy.prepare(self.student)
         
+        # Initialize EMA state for ema update in OPSD
+        if self.args.kd.use_ema_teacher:
+            self.ema_state = {
+                n: p.detach().to("cpu").clone()
+                for n, p in self.student.model.named_parameters()
+                if p.requires_grad
+            }
+        else:
+            self.ema_state = None
+                    
         # configure optimizer
         self.optim = strategy.create_optimizer(
             self.student, 
@@ -304,6 +314,9 @@ class StudentRayActor:
 
             self.strategy.optimizer_step(self.optim, self.student, self.scheduler)
 
+            if self.args.kd.use_ema_teacher and self.strategy.step == 0:
+                self.ema_update()
+
             if "response_length" in micro_batch:
                 status["response_length"].append(micro_batch["response_length"].mean().item())
             if "total_length" in micro_batch:
@@ -360,6 +373,14 @@ class StudentRayActor:
         # wait
         torch_dist_barrier_and_cuda_sync()
         
+    @torch.no_grad()
+    def ema_update(self):
+        """EMA update weights for teacher model."""
+        decay = self.args.kd.teacher_ema_decay
+        for n, p in self.student.model.named_parameters():
+            if p.requires_grad:
+                self.ema_state[n].mul_(decay).add_(p.detach().cpu(), alpha=1 - decay)
+        
     def connect_rollout_engines(self, rollout_engines, rollout_tp_size=1):
         """Create Gloo IPC groups for weight sync (following slime)."""
         import torch.distributed as dist
@@ -408,4 +429,5 @@ class StudentRayActor:
             engine=self._ipc_teacher_actor,
             gather_src=self._ipc_gather_src_for_teacher,
             gather_group=self._ipc_gather_group_for_teacher,
+            weight_source=self.ema_state
         )

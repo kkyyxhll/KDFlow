@@ -61,8 +61,16 @@ class DistillationArguments:
         metadata={"help": "Memory fraction for teacher model."}
     )
     teacher_update_freq: int = field(
-        default=1,
+        default=10,
         metadata={"help": "Weight update frequency for teacher model."}
+    )
+    use_ema_teacher: bool = field(
+        default=False,
+        metadata={"help": "Use EMA update for teacher model."}
+    )
+    teacher_ema_decay: float = field(
+        default=0.999,
+        metadata={"help": "EMA decay for teacher model."}
     )
     # DSKD hyperparameters
     dskd_token_align: str = field(

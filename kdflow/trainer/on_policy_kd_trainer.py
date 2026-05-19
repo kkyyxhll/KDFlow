@@ -466,6 +466,10 @@ class OnPolicyKDTrainer:
                     self.log_state[k] = sum(self.log_state[k]) / len(self.log_state[k])
             log_info = []
             for k in self.log_state:
+                # Skip keys that have no values logged in this interval (e.g. teacher_update_time
+                # is only logged every teacher_update_freq steps).
+                if isinstance(self.log_state[k], list):
+                    continue
                 if k == "lr":
                     log_info.append(f"lr: {self.log_state[k]:.6e}")
                 else:
@@ -478,6 +482,8 @@ class OnPolicyKDTrainer:
             if self._wandb is not None:
                 logs = {"train/global_step": self.global_step}
                 for k in self.log_state:
+                    if isinstance(self.log_state[k], list):
+                        continue
                     logs[f"train/{k}"] = self.log_state[k]
                 self._wandb.log(logs)
 
