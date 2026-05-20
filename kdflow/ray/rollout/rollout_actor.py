@@ -86,6 +86,7 @@ class RolloutRayActor:
             "skip_server_warmup": True,
             "log_level": "warning",
             "log_level_http": "warning",
+            "disable_custom_all_reduce": True,
         }
         if mem_fraction_static is not None:
             server_args_dict["mem_fraction_static"] = mem_fraction_static

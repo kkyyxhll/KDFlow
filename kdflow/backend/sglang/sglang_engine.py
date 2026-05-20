@@ -84,6 +84,7 @@ def _engine_worker(config: EngineConfig, request_queue: Queue, response_queue: Q
             nnodes=config.nnodes,
             node_rank=config.node_rank,
             dist_init_addr=config.dist_init_addr,
+            disable_custom_all_reduce=True,
         )
 
         response_queue.put({
