@@ -208,13 +208,16 @@ class StudentRayActor:
                     continue
             return None, None
 
+        EMBED_KEYS = ("model.embed_tokens.weight", "model.language_model.embed_tokens.weight")
+
         def resolve_target_key(weight_map):
             if weight_map and "lm_head.weight" in weight_map:
                 return "lm_head.weight"
             if getattr(config, "tie_word_embeddings", True):
-                if weight_map is None or "model.embed_tokens.weight" in weight_map:
-                    return "model.embed_tokens.weight"
-            raise ValueError("Could not find lm_head.weight or model.embed_tokens.weight in checkpoint.")
+                for cand in EMBED_KEYS:
+                    if weight_map is None or cand in weight_map:
+                        return cand
+            raise ValueError(f"Could not find lm_head.weight or any of {EMBED_KEYS} in checkpoint.")
 
         weight_map, use_safetensors = try_load_index()
         target_key = resolve_target_key(weight_map)
@@ -234,9 +237,12 @@ class StudentRayActor:
 
         state_dict = load_file(checkpoint_file) if use_safetensors else torch.load(checkpoint_file, map_location="cpu")
 
-        weight_key = "lm_head.weight" if "lm_head.weight" in state_dict else "model.embed_tokens.weight"
-        if weight_key not in state_dict:
-            raise ValueError(f"Key '{weight_key}' not found. Available: {list(state_dict.keys())[:10]}...")
+        if "lm_head.weight" in state_dict:
+            weight_key = "lm_head.weight"
+        else:
+            weight_key = next((k for k in EMBED_KEYS if k in state_dict), None)
+        if weight_key is None:
+            raise ValueError(f"None of 'lm_head.weight' or {EMBED_KEYS} found. Available: {list(state_dict.keys())[:10]}...")
         weight = state_dict[weight_key]
 
         assert weight.shape == (vocab_size, hidden_size), \
