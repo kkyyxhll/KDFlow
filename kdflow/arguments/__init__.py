@@ -25,6 +25,16 @@ class AllArguments:
     log: LoggingArguments = field(default_factory=LoggingArguments)
     
 
+def is_linear_attention(model_path: str) -> bool:
+    if not model_path:
+        return False
+    try:
+        from transformers import AutoConfig
+        model_type = AutoConfig.from_pretrained(model_path, trust_remote_code=True).model_type or ""
+    except Exception:
+        return False
+    return any(k in model_type.lower() for k in ("qwen3_next", "qwen3_5"))
+
 def init_args(scenario: str = "sft"):
     parser = HfArgumentParser((
         DataArguments,
@@ -72,7 +82,14 @@ def init_args(scenario: str = "sft"):
                 "Please use --attn_implementation with flash_attention to accelerate when --packing_samples is enabled."
             )
             args.model.attn_implementation = "flash_attention_2"
-            
+
+        if is_linear_attention(args.model.student_name_or_path):
+            logger.warning(
+                f"--packing_samples is not yet compatible with linear-attention models "
+                f"(got {args.model.student_name_or_path}). Auto-disabling --packing_samples."
+            )
+            args.data.packing_samples = False
+
     total_gpus = args.train.num_nodes * args.train.num_gpus_per_node
     
     if scenario == "on_policy_kd":
