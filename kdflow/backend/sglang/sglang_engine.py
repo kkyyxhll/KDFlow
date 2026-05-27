@@ -1,12 +1,10 @@
 import os
-import pickle
 import queue
-import multiprocessing as mp
-from multiprocessing import Queue
+import torch.multiprocessing as mp
+from torch.multiprocessing import Queue
 from typing import List, Dict, Any, Tuple, Optional
 from dataclasses import dataclass
 
-import zmq
 import numpy as np
 import torch
 from sglang.srt.entrypoints.engine import Engine as _SglEngine
@@ -54,20 +52,14 @@ class EngineConfig:
     dist_init_addr: Optional[str] = None
 
 
-def _engine_worker(config: EngineConfig, request_queue: Queue, response_queue: Queue):
+def _engine_worker(config: EngineConfig, request_queue: Queue, response_queue: Queue, hidden_queue: Queue):
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
     if config.nnodes > 1:
         os.environ["SGLANG_BLOCK_NONZERO_RANK_CHILDREN"] = "0"
 
     engine = None
-    zmq_ctx = None
 
     try:
-        zmq_ctx = zmq.Context()
-        data_socket = zmq_ctx.socket(zmq.PUSH)
-        zmq_ipc_addr = f"ipc:///tmp/sglang_hs_{os.getpid()}"
-        data_socket.bind(zmq_ipc_addr)
-        
         engine = PatchedEngine(
             model_path=config.model_path,
             tp_size=config.tp_size,
@@ -89,8 +81,7 @@ def _engine_worker(config: EngineConfig, request_queue: Queue, response_queue: Q
 
         response_queue.put({
             "type": "init_done", 
-            "success": True, 
-            "zmq_ipc_addr": zmq_ipc_addr
+            "success": True,
         })
 
         while True:
@@ -102,7 +93,7 @@ def _engine_worker(config: EngineConfig, request_queue: Queue, response_queue: Q
 
             try:
                 if req_type == "generate":
-                    _handle_generate(engine, request, data_socket, request_queue, response_queue)
+                    _handle_generate(engine, request, hidden_queue, response_queue)
                 elif req_type == "sleep":
                     _handle_sleep(engine, request, config, response_queue)
                 elif req_type == "wakeup":
@@ -122,12 +113,6 @@ def _engine_worker(config: EngineConfig, request_queue: Queue, response_queue: Q
         response_queue.put({"type": "init_done", "success": False,
                             "error": traceback.format_exc()})
     finally:
-        if zmq_ctx:
-            try:
-                data_socket.close()
-                zmq_ctx.term()
-            except Exception:
-                pass
         if engine:
             try:
                 engine.shutdown()
@@ -144,8 +129,8 @@ def _normalize_tags(tags):
     return tags
 
 
-def _handle_generate(engine, request, data_socket, request_queue, response_queue):
-    """Handle a generate request: run inference and send hidden states via ZMQ."""
+def _handle_generate(engine, request, hidden_queue, response_queue):
+    """Handle a generate request: run inference and send hidden states via shared memory."""
     kwargs = request["kwargs"]
 
     generate_kwargs = {
@@ -157,25 +142,24 @@ def _handle_generate(engine, request, data_socket, request_queue, response_queue
         generate_kwargs["image_data"] = kwargs["image_data"]
 
     outputs = engine.generate(**generate_kwargs)
-
     num_samples = len(outputs)
-    
+
     response_queue.put({
         "type": "generate",
         "success": True,
         "num_samples": num_samples,
     })
-    
-    for i, (output, mask) in enumerate(zip(outputs, kwargs["loss_masks"])):
+
+    for output, mask in zip(outputs, kwargs["loss_masks"]):
         hs_np = output["meta_info"]["hidden_states"][0]
         hs_np = hs_np[:mask.shape[0]]  # loss_mask may have been truncated
         hs_np = hs_np[mask]
+
         if not hs_np.flags['C_CONTIGUOUS']:
             hs_np = np.ascontiguousarray(hs_np)
-            
-        meta = pickle.dumps({"shape": hs_np.shape, "dtype": str(hs_np.dtype)})
-        data_socket.send(meta, flags=zmq.SNDMORE)
-        data_socket.send(hs_np, copy=False)
+
+        hs_tensor = torch.from_numpy(hs_np).share_memory_()
+        hidden_queue.put(hs_tensor)
 
 
 def _handle_sleep(engine, request, config, response_queue):
@@ -192,8 +176,8 @@ def _handle_wakeup(engine, request, config, response_queue):
     torch.cuda.empty_cache()
     engine.resume_memory_occupation(tags=_normalize_tags(tags))
     response_queue.put({"type": "wakeup", "success": True, "tags": tags})
-    
-    
+
+
 def _handle_update_weights_from_tensor(engine, request, response_queue):
     """Handle a update_weights_from_tensor request: update weights from student (for self-distillation)."""
     serialized_named_tensors = request["kwargs"]["serialized_named_tensors"]
@@ -208,16 +192,15 @@ def _handle_update_weights_from_tensor(engine, request, response_queue):
 
 
 class SGLangEngineService:
-    """Manages SGLang Engine in a subprocess with ZMQ communication."""
+    """Manages SGLang Engine in a subprocess with torch multiprocessing communication."""
 
     def __init__(self, config: EngineConfig):
         self.config = config
         self.process: Optional[mp.Process] = None
         self.request_queue: Optional[Queue] = None
         self.response_queue: Optional[Queue] = None
+        self.hidden_queue: Optional[Queue] = None
         self._started = False
-        self._zmq_ctx: Optional[zmq.Context] = None
-        self._data_socket = None
 
     def start(self, timeout: float = 1800.0):
         """Start the SGLang Engine in a subprocess."""
@@ -231,10 +214,11 @@ class SGLangEngineService:
 
         self.request_queue = mp.Queue()
         self.response_queue = mp.Queue()
+        self.hidden_queue = mp.Queue(maxsize=2)
 
         self.process = mp.Process(
             target=_engine_worker,
-            args=(self.config, self.request_queue, self.response_queue),
+            args=(self.config, self.request_queue, self.response_queue, self.hidden_queue),
         )
         self.process.start()
 
@@ -242,9 +226,6 @@ class SGLangEngineService:
             response = self.response_queue.get(timeout=timeout)
             if response.get("type") == "init_done" and response.get("success"):
                 self._started = True
-                self._zmq_ctx = zmq.Context()
-                self._data_socket = self._zmq_ctx.socket(zmq.PULL)
-                self._data_socket.connect(response["zmq_ipc_addr"])
             else:
                 raise RuntimeError(f"Init failed: {response.get('error')}")
         except Exception as e:
@@ -259,7 +240,7 @@ class SGLangEngineService:
         return_hidden_states: bool = True,
         image_data=None,
     ) -> List[np.ndarray]:
-        """Run generation and return hidden states via ZMQ.
+        """Run generation and return hidden states via shared-memory tensors.
         
         Args:
             prompt: List of raw text prompts. SGLang handles tokenization internally.
@@ -293,17 +274,16 @@ class SGLangEngineService:
         if not response.get("success"):
             raise RuntimeError(f"Generate failed: {response.get('error')}")
 
-        # Read hidden states via ZMQ
         num_samples = response["num_samples"]
         hidden_states = []
-        for _ in range(num_samples):
-            if self._data_socket.poll(timeout=120_000) == 0:
-                raise RuntimeError("ZMQ recv timeout while receiving hidden states")
-            meta_bytes = self._data_socket.recv()
-            data_bytes = self._data_socket.recv()
-            meta = pickle.loads(meta_bytes)
-            hs = np.frombuffer(data_bytes, dtype=np.dtype(meta["dtype"])).reshape(meta["shape"])
-            hidden_states.append(hs.copy())  # copy because zmq buffer will be reused
+        for i in range(num_samples):
+            try:
+                hs_tensor = self.hidden_queue.get(timeout=300)
+            except queue.Empty:
+                raise RuntimeError(
+                    f"Hidden state recv timeout while receiving hidden states, sample={i}/{num_samples}"
+                )
+            hidden_states.append(hs_tensor.numpy())
 
         return hidden_states
 
@@ -363,19 +343,6 @@ class SGLangEngineService:
 
     def _cleanup(self):
         """Clean up subprocess, queues and shared memory."""
-        if self._data_socket:
-            try:
-                self._data_socket.close()
-            except Exception:
-                pass
-            self._data_socket = None
-        if self._zmq_ctx:
-            try:
-                self._zmq_ctx.term()
-            except Exception:
-                pass
-            self._zmq_ctx = None
-
         if self.request_queue:
             try:
                 self.request_queue.put(None)
@@ -393,6 +360,7 @@ class SGLangEngineService:
         self.process = None
         self.request_queue = None
         self.response_queue = None
+        self.hidden_queue = None
 
     def __del__(self):
         try:
