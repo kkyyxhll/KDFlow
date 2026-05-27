@@ -211,6 +211,7 @@ class SFTDataset(Dataset):
         multi_modal_inputs = {k: v for k, v in enc.items() if k not in skip}
         return {
             "input_ids": enc["input_ids"][0],
+            "attention_mask": enc["attention_mask"][0],
             "multi_modal_inputs": multi_modal_inputs or None,
         }
 
@@ -240,7 +241,9 @@ class SFTDataset(Dataset):
         stu_input_ids = zero_pad_sequences(
             [e["input_ids"] for e in stu_encs], side="right", value=stu_pad_id,
         )
-        stu_attn_mask = (stu_input_ids != stu_pad_id).long()
+        stu_attn_mask = zero_pad_sequences(
+            [e["attention_mask"] for e in stu_encs], side="right", value=0,
+        ).long()
         stu_loss_mask = self._build_loss_mask(
             stu_attn_mask, [item["stu_resp_len"] for item in item_list],
         )
@@ -264,7 +267,9 @@ class SFTDataset(Dataset):
                 tea_input_ids = zero_pad_sequences(
                     [e["input_ids"] for e in tea_encs], side="right", value=tea_pad_id,
                 )
-                tea_attn_mask = (tea_input_ids != tea_pad_id).long()
+                tea_attn_mask = zero_pad_sequences(
+                    [e["attention_mask"] for e in tea_encs], side="right", value=0,
+                ).long()
                 batch["tea_input_ids"] = tea_input_ids
                 batch["tea_attn_mask"] = tea_attn_mask
                 batch["tea_loss_mask"] = self._build_loss_mask(
