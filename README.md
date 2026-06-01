@@ -98,6 +98,8 @@ docker build -f docker/Dockerfile.sgl059.torch291.cu128 -t kdflow:sgl059-torch29
 
 > To support Qwen3.5, please use the latest version of SGLang which supports transformers v5.3.0.
 
+> Note that `sglang==0.5.9` is known to have a critical VLM issue (see [sglang#19335](https://github.com/sgl-project/sglang/issues/19335)). For source installation, please use `sglang>=0.5.10`. The current Docker image is still based on `sglang==0.5.9`; updated Docker images will be released soon.
+
 ### Off-Policy Knowledge Distillation
 LLMs:
 ```bash

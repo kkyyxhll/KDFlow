@@ -1,4 +1,4 @@
-sglang
+sglang>=0.5.10
 torch>=2.4
 transformers
 numpy
