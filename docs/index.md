@@ -38,48 +38,38 @@ from a single 8-GPU node to multi-node TP/PP setups for 200B+ teachers.
 
 ## Where to go next
 
-<div class="grid cards" markdown>
+**Get up and running**
 
-- :material-rocket-launch:{ .lg .middle } **Get up and running**
+Install KDFlow and run your first distillation job in minutes.
 
-    ---
+- [Installation](getting_started/installation.md)
+- [Quickstart](getting_started/quickstart.md)
 
-    Install KDFlow and run your first distillation job in minutes.
+**User guide**
 
-    [:octicons-arrow-right-24: Installation](getting_started/installation.md) ·
-    [:octicons-arrow-right-24: Quickstart](getting_started/quickstart.md)
+Walk through every supported training scenario with annotated example scripts.
 
-- :material-book-open-variant:{ .lg .middle } **User guide**
+- [Off-Policy KD](user_guide/off_policy_kd.md)
+- [On-Policy KD](user_guide/on_policy_kd.md)
+- [Cross-Tokenizer KD](user_guide/cross_tokenizer_kd.md)
+- [Supervised Fine-Tuning](user_guide/sft.md)
+- [Multimodal (VLM) Distillation](user_guide/multimodal.md)
 
-    ---
+**Concepts**
 
-    Walk through every supported training scenario with annotated example scripts.
+Understand the architecture, supported KD algorithms, and loss functions.
 
-    [:octicons-arrow-right-24: Off-Policy KD](user_guide/off_policy_kd.md) ·
-    [:octicons-arrow-right-24: On-Policy KD](user_guide/on_policy_kd.md) ·
-    [:octicons-arrow-right-24: Cross-Tokenizer KD](user_guide/cross_tokenizer_kd.md)
+- [Architecture](concepts/architecture.md)
+- [KD Algorithms](concepts/algorithms.md)
+- [KD Loss Functions](concepts/losses.md)
 
-- :material-cog-outline:{ .lg .middle } **Concepts**
+**Reference**
 
-    ---
+Full CLI surface, argument tables, and extension hooks.
 
-    Understand the architecture, supported KD algorithms, and loss functions.
-
-    [:octicons-arrow-right-24: Architecture](concepts/architecture.md) ·
-    [:octicons-arrow-right-24: Algorithms](concepts/algorithms.md) ·
-    [:octicons-arrow-right-24: Losses](concepts/losses.md)
-
-- :material-tools:{ .lg .middle } **Reference**
-
-    ---
-
-    Full CLI surface, argument tables, and extension hooks.
-
-    [:octicons-arrow-right-24: CLI](reference/cli.md) ·
-    [:octicons-arrow-right-24: Arguments](reference/arguments.md) ·
-    [:octicons-arrow-right-24: Extending](reference/extending.md)
-
-</div>
+- [CLI Entry Points](reference/cli.md)
+- [Arguments](reference/arguments.md)
+- [Extending KDFlow](reference/extending.md)
 
 ---
 
