@@ -45,25 +45,19 @@ pip install -e ".[all]"
     `transformers ≥ 5.3.0`.  
     `sglang==0.5.9` has a known critical VLM bug
     ([sglang#19335](https://github.com/sgl-project/sglang/issues/19335)) — for source
-    installs please pin `sglang>=0.5.10`.
+    installs please pin `sglang>=0.5.10`. The recommended Docker image below is
+    already on sglang 0.5.12 and is not affected.
 
 ## Use the prebuilt Docker image
 
-The simplest way to get a working environment:
+The simplest way to get a working environment is to pull the **recommended**
+image (sglang 0.5.12 + CUDA 12.9):
 
 ```bash
-docker pull songmzhang/kdflow:sgl059-torch291-cu128
+docker pull songmzhang/kdflow:sgl0512-torch211-cu129
 ```
 
-Or build from the provided Dockerfile:
-
-```bash
-docker build -f docker/Dockerfile.sgl059.torch291.cu128 \
-             -t kdflow:sgl059-torch291-cu128 .
-```
-
-Other Dockerfiles (different CUDA / torch / SGLang combinations) are available
-under [`docker/`](https://github.com/songmzhang/KDFlow/tree/main/docker) and on
+Other CUDA / torch / SGLang combinations are available on
 [Docker Hub](https://hub.docker.com/repository/docker/songmzhang/kdflow/tags).
 
 ## Verify the installation

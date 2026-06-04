@@ -16,6 +16,7 @@
 
 ## 🔥 News
 
+- **[2026/05]** 🐳 New Docker image based on **sglang 0.5.12 + CUDA 12.9** is now available on [Docker Hub](https://hub.docker.com/repository/docker/songmzhang/kdflow/tags) — **recommended** going forward.
 - **[2026/05]** 🪄 Support **EMA teacher update** for on-policy self-distillation, enabled via `--use_ema_teacher True` and `--teacher_ema_decay <float>` (default `0.999`).
 - **[2026/04]** ⚡ Support dynamic batch size (enabled via `--use_dynamic_bsz True` and `--max_token_len_per_gpu <N>`), which accelerates training by almost **60% to 100%**.
 - **[2026/04]** 🎉 KDFlow v0.1.3 has been released, now supporting weight synchronization from student to teacher in on-policy self-distillation (controlled by `--teacher_update_freq`, defaults to `1` meaning the teacher is synced every global step when student and teacher share the same model path).
@@ -85,21 +86,15 @@ pip install -e ./
 pip install flash_attn==2.8.3 --no-build-isolation
 ```
 
-Use the prebuilt Docker image from Docker Hub:
+Use the prebuilt Docker image from Docker Hub (**recommended**):
 
 ```bash
-docker pull songmzhang/kdflow:sgl059-torch291-cu128
-```
-
-Or build from the provided Dockerfile:
-
-```bash
-docker build -f docker/Dockerfile.sgl059.torch291.cu128 -t kdflow:sgl059-torch291-cu128 .
+docker pull songmzhang/kdflow:sgl0512-torch211-cu129
 ```
 
 > To support Qwen3.5, please use the latest version of SGLang which supports transformers v5.3.0.
 
-> Note that `sglang==0.5.9` is known to have a critical VLM issue (see [sglang#19335](https://github.com/sgl-project/sglang/issues/19335)). For source installation, please use `sglang>=0.5.10`. The current Docker image is still based on `sglang==0.5.9`; updated Docker images will be released soon.
+> Older `sgl059-torch291-cu128` images are kept as legacy; for source installs we recommend pinning `sglang>=0.5.10` to avoid the VLM issue in [sglang#19335](https://github.com/sgl-project/sglang/issues/19335).
 
 ### Off-Policy Knowledge Distillation
 LLMs:
