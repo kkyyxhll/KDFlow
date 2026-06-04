@@ -1,9 +1,16 @@
 # Changelog
 
+This page mirrors the **News** section of the project README.
+
 ## 2026/05 — EMA teacher update
 
-Support EMA teacher update for on-policy self-distillation. Now you can enable it via `--use_ema_teacher True` and
-`--teacher_ema_decay 0.999`.
+🪄 Support **EMA teacher update** for on-policy self-distillation. Enable it
+with `--use_ema_teacher True` and tune the decay via `--teacher_ema_decay`
+(default `0.999`). When enabled, the teacher is synced from a CPU-resident
+exponential moving average of the student's parameters instead of the live
+student weights, giving a smoother target — see
+[On-Policy KD → Self-distillation](../user_guide/on_policy_kd.md#self-distillation-teacher-from-student-weight-sync)
+for the formula and tuning tips.
 
 ## 2026/04 — Dynamic batch size
 
