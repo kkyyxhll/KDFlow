@@ -2,15 +2,12 @@
 
 This page mirrors the **News** section of the project README.
 
-## 2026/05 — New Docker image (sglang 0.5.12 + CUDA 12.9)
+## 2026/06 — New Docker image (sglang 0.5.12 + CUDA 12.9)
 
 🐳 A new Docker image **`kdflow:sgl0512-torch211-cu129`** based on
 **sglang 0.5.12** and **CUDA 12.9** is now available on
 [Docker Hub](https://hub.docker.com/repository/docker/songmzhang/kdflow/tags).
-The corresponding Dockerfile is provided in
-[`docker/Dockerfile.sgl0512.torch211.cu129`](https://github.com/songmzhang/KDFlow/blob/main/docker/Dockerfile.sgl0512.torch211.cu129).
-**This image is recommended going forward** — it picks up the VLM fixes from
-sglang ≥ 0.5.10 and the latest CUDA 12.9 toolchain.
+**This image is recommended going forward** — it picks up the VLM fixes from sglang ≥ 0.5.10.
 
 ## 2026/05 — EMA teacher update
 

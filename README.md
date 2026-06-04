@@ -16,7 +16,7 @@
 
 ## 🔥 News
 
-- **[2026/05]** 🐳 New Docker image based on **sglang 0.5.12 + CUDA 12.9** is now available on [Docker Hub](https://hub.docker.com/repository/docker/songmzhang/kdflow/tags) — **recommended** going forward.
+- **[2026/06]** 🐳 New Docker image based on **sglang 0.5.12 + CUDA 12.9** is now available on [Docker Hub](https://hub.docker.com/repository/docker/songmzhang/kdflow/tags) — **recommended** going forward.
 - **[2026/05]** 🪄 Support **EMA teacher update** for on-policy self-distillation, enabled via `--use_ema_teacher True` and `--teacher_ema_decay <float>` (default `0.999`).
 - **[2026/04]** ⚡ Support dynamic batch size (enabled via `--use_dynamic_bsz True` and `--max_token_len_per_gpu <N>`), which accelerates training by almost **60% to 100%**.
 - **[2026/04]** 🎉 KDFlow v0.1.3 has been released, now supporting weight synchronization from student to teacher in on-policy self-distillation (controlled by `--teacher_update_freq`, defaults to `1` meaning the teacher is synced every global step when student and teacher share the same model path).
