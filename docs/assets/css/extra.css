@@ -43,3 +43,14 @@
 .rst-versions .rst-current-version > span > a {
   color: #fcfcfc;
 }
+
+/* ----------------------------------------------------------------------------
+ * Make the main content area fill the available viewport width.
+ * The readthedocs theme caps `.wy-nav-content` at 800px by default, which
+ * leaves a lot of empty space on wide monitors and crams long code blocks /
+ * tables into the centre.
+ * ------------------------------------------------------------------------- */
+.wy-nav-content {
+  max-width: none !important;
+}
+
