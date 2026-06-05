@@ -390,7 +390,8 @@ class RolloutActorGroup:
                     results[idx] = output
 
         connector = aiohttp.TCPConnector(limit=max_concurrent)
-        async with aiohttp.ClientSession(connector=connector) as session:
+        timeout = aiohttp.ClientTimeout(total=None, sock_read=None, sock_connect=60)
+        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
             tasks = [
                 asyncio.create_task(_generate_one(i, prompt, session))
                 for i, prompt in enumerate(prompts)
