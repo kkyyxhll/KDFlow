@@ -95,7 +95,9 @@ docker pull songmzhang/kdflow:sgl0512-torch211-cu129
 
 > To support Qwen3.5, please use the latest version of SGLang which supports transformers v5.3.0.
 
-> Older `sgl059-torch291-cu128` images are kept as legacy; for source installs we recommend pinning `sglang>=0.5.10` to avoid the VLM issue in [sglang#19335](https://github.com/sgl-project/sglang/issues/19335).
+> Older `sgl059-torch291-cu128` images are kept as legacy.
+>
+> ⚠️ **VLM users:** `sglang==0.5.9` has a known VLM compatibility bug tracked in [sglang#19335](https://github.com/sgl-project/sglang/issues/19335) and [kdflow#9](https://github.com/songmzhang/KDFlow/issues/9). For source installs, please pin `sglang>=0.5.10`.
 
 ### Off-Policy Knowledge Distillation
 LLMs:

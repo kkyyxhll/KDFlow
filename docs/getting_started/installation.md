@@ -40,13 +40,17 @@ pip install -e ".[lora]"
 pip install -e ".[all]"
 ```
 
-!!! note "Qwen3.5 / latest VLM support"
-    To use **Qwen3.5** and similar models, install a recent SGLang that supports
-    `transformers ≥ 5.3.0`.  
-    `sglang==0.5.9` has a known critical VLM bug
-    ([sglang#19335](https://github.com/sgl-project/sglang/issues/19335)) — for source
-    installs please pin `sglang>=0.5.10`. The recommended Docker image below is
-    already on sglang 0.5.12 and is not affected.
+!!! note "Qwen3.5 support"
+    To use **Qwen3.5** and similar models, install a recent SGLang version that
+    supports `transformers ≥ 5.3.0`.
+
+!!! warning "VLM users"
+    `sglang==0.5.9` has a known VLM compatibility bug tracked in
+    [sglang#19335](https://github.com/sgl-project/sglang/issues/19335) and
+    [kdflow#9](https://github.com/songmzhang/KDFlow/issues/9).
+
+    For source installs, please pin `sglang>=0.5.10`. The recommended Docker
+    image below uses sglang 0.5.12 and is not affected.
 
 ## Use the prebuilt Docker image
 
