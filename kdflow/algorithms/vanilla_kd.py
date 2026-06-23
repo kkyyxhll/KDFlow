@@ -39,6 +39,24 @@ class VanillaKD:
 
         return torch.cat(logits_list, dim=0)
 
+    @staticmethod
+    def _compute_topk_token_overlap_ratios(student_logits, teacher_logits, topks=(4, 16, 64)):
+        overlap_ratios = {}
+        with torch.no_grad():
+            for topk in topks:
+                k = min(topk, student_logits.shape[-1])
+                student_topk = student_logits.topk(k=k, dim=-1).indices
+                teacher_topk = teacher_logits.topk(k=k, dim=-1).indices
+                token_overlap_ratio = (
+                    (student_topk.unsqueeze(-1) == teacher_topk.unsqueeze(-2))
+                    .any(dim=-1)
+                    .float()
+                    .sum(dim=-1)
+                    / k
+                )
+                overlap_ratios[f"top{topk}@token_overlap_ratio"] = token_overlap_ratio.mean()
+        return overlap_ratios
+
     def training_step(self, micro_batch):
         student_input_ids = micro_batch["stu_input_ids"]
         student_attn_mask = micro_batch["stu_attn_mask"]
@@ -85,7 +103,8 @@ class VanillaKD:
         )
         kd_loss = kd_loss.sum() / avg_token_num
         loss_info = {"loss": kd_loss, "kd_loss": kd_loss}
-        
+        loss_info.update(self._compute_topk_token_overlap_ratios(student_logits, teacher_logits))
+
         if self.args.kd.kd_ratio < 1:
             student_label_ids = student_input_ids.roll(shifts=-1, dims=1)[student_loss_mask]
             ce_loss = compute_cross_entropy(student_logits, student_label_ids, reduction="sum") / avg_token_num
