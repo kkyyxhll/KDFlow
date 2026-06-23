@@ -2,6 +2,14 @@
 
 This page mirrors the **News** section of the project README.
 
+## 2026/06 — Multi-teacher distillation
+
+🧑‍🏫 Support **multi-teacher distillation** for both off-policy and on-policy KD.
+Use `--multi_teacher_config` to provide a JSON mapping from routing keys to
+teacher model paths, and `--teacher_routing_key` to read the per-sample routing
+field from the dataset. See [Multi-Teacher KD](../user_guide/multi_teacher_kd.md)
+for examples.
+
 ## 2026/06 — New Docker image (sglang 0.5.12 + CUDA 12.9)
 
 🐳 A new Docker image **`kdflow:sgl0512-torch211-cu129`** based on

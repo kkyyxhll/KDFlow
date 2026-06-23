@@ -23,6 +23,7 @@ from a single 8-GPU node to multi-node TP/PP setups for 200B+ teachers.
 - **Off-policy KD** — distill from pre-collected teacher hidden states on static datasets.
 - **On-policy KD** — student rollouts feed the teacher in a closed loop.
 - **Cross-tokenizer KD** — distill across different tokenizers (e.g. Llama → Qwen).
+- **Multi-teacher KD** — route samples to domain-specific teachers with `--multi_teacher_config` and `--teacher_routing_key`.
 - **SFT (black-box KD)** — single-controller supervised fine-tuning on collected data.
 - **Multimodal support** — distill vision-language models such as Qwen3-VL.
 - **GPU co-location** — teacher and student share GPUs via the sleep/wakeup mechanism.
@@ -51,6 +52,7 @@ Walk through every supported training scenario with annotated example scripts.
 
 - [Off-Policy KD](user_guide/off_policy_kd.md)
 - [On-Policy KD](user_guide/on_policy_kd.md)
+- [Multi-Teacher KD](user_guide/multi_teacher_kd.md)
 - [Cross-Tokenizer KD](user_guide/cross_tokenizer_kd.md)
 - [Supervised Fine-Tuning](user_guide/sft.md)
 - [Multimodal (VLM) Distillation](user_guide/multimodal.md)

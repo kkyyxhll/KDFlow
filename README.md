@@ -17,6 +17,7 @@
 
 ## 🔥 News
 
+- **[2026/06]** 🧑‍🏫 Support **multi-teacher distillation** for both off-policy and on-policy KD via `--multi_teacher_config` and per-sample `--teacher_routing_key`.
 - **[2026/06]** 🐳 New Docker image based on **sglang 0.5.12 + CUDA 12.9** is now available on [Docker Hub](https://hub.docker.com/repository/docker/songmzhang/kdflow/tags) — **recommended** going forward.
 - **[2026/05]** 🪄 Support **EMA teacher update** for on-policy self-distillation, enabled via `--use_ema_teacher True` and `--teacher_ema_decay <float>` (default `0.999`).
 - **[2026/04]** ⚡ Support dynamic batch size (enabled via `--use_dynamic_bsz True` and `--max_token_len_per_gpu <N>`), which accelerates training by almost **60% to 100%**.
@@ -36,6 +37,7 @@
   - [Installation](#installation)
   - [Off-Policy Knowledge Distillation](#off-policy-knowledge-distillation)
   - [On-Policy Knowledge Distillation](#on-policy-knowledge-distillation)
+  - [Multi-Teacher Distillation](#multi-teacher-distillation)
   - [Cross-Tokenizer Knowledge Distillation](#cross-tokenizer-knowledge-distillation)
   - [Supervised Fine-Tuning (SFT)](#supervised-fine-tuning-sft)
 - [⚙️ Arguments](#️-arguments)
@@ -57,6 +59,7 @@
 - **Off-Policy Knowledge Distillation** — Distill from pre-collected teacher hidden states on static datasets.
 - **On-Policy Knowledge Distillation** — Student-generated rollout responses are used for teacher forward and distillation training in a closed loop.
 - **Cross-Tokenizer Distillation** — Native support for distilling between models with different tokenizers (e.g., Llama → Qwen).
+- **Multi-Teacher Distillation** — Route each sample to a domain-specific teacher via `--multi_teacher_config` and `--teacher_routing_key`.
 - **SFT Training (Black-box KD)** — Supervised fine-tuning on collected dataset.
 - **MultiModal Support** — Support distillation with vision-language models (e.g., Qwen3-VL).
 - **Colocate Mode** — Teacher and student models **share the same GPUs** via sleep/wakeup mechanism, maximizing GPU utilization.
@@ -118,6 +121,29 @@ VLMs:
 ```bash
 bash ./examples/on_policy_kd/run_qwen3_vl_30b_a3b_to_4b.sh
 ```
+
+### Multi-Teacher Distillation
+
+Multi-teacher distillation supports both off-policy and on-policy KD. Provide a JSON config that maps routing keys to teacher model paths, and make sure each training sample contains a `teacher_routing_key` value matching one of those keys.
+
+```json
+{
+    "math": "Qwen3/Qwen3-14B",
+    "code": "Qwen3/Qwen3-14B"
+}
+```
+
+Off-policy:
+```bash
+bash ./examples/multi_teacher_distillation/run_multi_teacher_off_policy_distillation.sh
+```
+
+On-policy:
+```bash
+bash ./examples/multi_teacher_distillation/run_multi_teacher_on_policy_distillation.sh
+```
+
+See the [Multi-Teacher KD guide](docs/user_guide/multi_teacher_kd.md) for details.
 
 ### Cross-Tokenizer Knowledge Distillation
 
@@ -224,6 +250,7 @@ bash ./examples/sft/run_qwen3_4b.sh
 | `--teacher_mem_fraction_static` | `0.4` | SGLang static memory fraction for teacher |
 | `--teacher_offload_tags` | `all` | Offload tags for SGLang |
 | `--teacher_quantization` | `None` | Teacher model quantization |
+| `--multi_teacher_config` | `None` | JSON file mapping teacher routing keys to teacher model paths |
 | `--dskd_token_align` | `eta` | Token alignment strategy for DSKD (`eta` / `cma`) |
 | `--dskd_topk_vocab` | `-1` | Top-k vocab tokens for DSKD projector init (-1 = all) |
 | `--dskd_projector_lr` | `1e-4` | Learning rate for DSKD projectors |
@@ -260,6 +287,7 @@ bash ./examples/sft/run_qwen3_4b.sh
 | `--output_key` | `None` | Dataset output key |
 | `--image_key` | `None` | Image key for multimodal datasets |
 | `--teacher_input_key` | `None` | Input key for teacher prompt (for self-distillation/context distillation) |
+| `--teacher_routing_key` | `teacher_routing_key` | Dataset field used to route each sample to a teacher in multi-teacher distillation |
 | `--label_key` | `None` | Label key in dataset |
 | `--apply_chat_template` | `True` | Apply tokenizer chat template |
 | `--max_len` | `4096` | Max sequence length |

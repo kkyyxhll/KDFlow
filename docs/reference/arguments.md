@@ -96,6 +96,7 @@ Defined in `kdflow/arguments/distillation_args.py`. Used by the KD entry points
 | `--teacher_mem_fraction_static`   | `0.4`         | SGLang static memory fraction for teacher                                    |
 | `--teacher_offload_tags`          | `all`         | Offload tags for SGLang                                                      |
 | `--teacher_quantization`          | `None`        | Teacher quantisation (e.g. `awq`, `fp8`)                                     |
+| `--multi_teacher_config`          | `None`        | JSON file mapping teacher routing keys to teacher model paths                |
 | `--dskd_token_align`              | `eta`         | DSKD token alignment (`eta` / `cma`)                                         |
 | `--dskd_topk_vocab`               | `-1`          | Top-k vocab for DSKD projector init (-1 = all)                               |
 | `--dskd_projector_lr`             | `1e-4`        | LR for DSKD projectors                                                       |
@@ -143,6 +144,7 @@ Defined in `kdflow/arguments/data_args.py`.
 | `--output_key`                | `None`       | Dataset output key                                                         |
 | `--image_key`                 | `None`       | Image key for multimodal datasets                                          |
 | `--teacher_input_key`         | `None`       | Teacher prompt key (for self / context distillation)                       |
+| `--teacher_routing_key`       | `teacher_routing_key` | Dataset field used to route each sample to a teacher in multi-teacher KD |
 | `--label_key`                 | `None`       | Label key                                                                  |
 | `--apply_chat_template`       | `True`       | Apply tokenizer chat template                                              |
 | `--max_len`                   | `4096`       | Max sequence length                                                        |

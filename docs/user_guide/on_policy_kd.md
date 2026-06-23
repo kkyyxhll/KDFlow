@@ -106,6 +106,9 @@ bash examples/on_policy_kd/run_qwen3_vl_30b_a3b_to_4b.sh
 The only changes vs. LLM on-policy are the data pipeline and tokenizer/processor;
 see [Multimodal Distillation](multimodal.md).
 
+For routing rollouts to multiple domain-specific teachers, see
+[Multi-Teacher KD](multi_teacher_kd.md).
+
 ## Performance notes
 
 - **GPU co-location** — set `--enable_sleep True` so all three actor groups
@@ -122,6 +125,7 @@ see [Multimodal Distillation](multimodal.md).
 ## See also
 
 - [Off-Policy KD](off_policy_kd.md)
+- [Multi-Teacher KD](multi_teacher_kd.md)
 - [Cross-Tokenizer KD](cross_tokenizer_kd.md) — on-policy variants are also
   supported.
 - [Architecture](../concepts/architecture.md) — how the three actor groups

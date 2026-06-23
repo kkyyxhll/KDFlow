@@ -32,6 +32,8 @@ KDFlow ships ready-to-run shell scripts in
 | Off-policy KD (VLM)                     | `examples/off_policy_kd/run_qwen3_vl_30b_a3b_to_4b.sh`                                        |
 | On-policy KD (LLM)                      | `examples/on_policy_kd/run_qwen3_30b_a3b_to_4b.sh`                                            |
 | On-policy KD (VLM)                      | `examples/on_policy_kd/run_qwen3_vl_30b_a3b_to_4b.sh`                                         |
+| Multi-teacher KD (off-policy)           | `examples/multi_teacher_distillation/run_multi_teacher_off_policy_distillation.sh`             |
+| Multi-teacher KD (on-policy)            | `examples/multi_teacher_distillation/run_multi_teacher_on_policy_distillation.sh`              |
 | Cross-tokenizer KD (off-policy, simple) | `examples/cross_tokenizer_kd/run_qwen3_30b_a3b_to_llama3_2_3b_offpolicy_simple_ctkd.sh`       |
 | Cross-tokenizer KD (off-policy, DSKD)   | `examples/cross_tokenizer_kd/run_qwen3_30b_a3b_to_llama3_2_3b_offpolicy.sh`                   |
 | Cross-tokenizer KD (on-policy, simple)  | `examples/cross_tokenizer_kd/run_qwen3_30b_a3b_to_llama3_2_3b_onpolicy_simple_ctkd.sh`        |
@@ -96,7 +98,37 @@ Key extra arguments compared to off-policy:
 
 See [On-Policy KD](../user_guide/on_policy_kd.md) for details.
 
-## 5. Run SFT (no Ray)
+## 5. Run multi-teacher KD
+
+Multi-teacher KD routes each sample to one of multiple teacher models. Provide a
+JSON config that maps routing keys to teacher paths:
+
+```json
+{
+    "math": "Qwen3/Qwen3-14B",
+    "code": "Qwen3/Qwen3-14B"
+}
+```
+
+Your dataset must contain a `teacher_routing_key` field whose value matches a key
+in the config. Then run either recipe:
+
+```bash
+bash examples/multi_teacher_distillation/run_multi_teacher_off_policy_distillation.sh
+bash examples/multi_teacher_distillation/run_multi_teacher_on_policy_distillation.sh
+```
+
+Key flags:
+
+```bash
+--multi_teacher_config examples/multi_teacher_distillation/teacher_config.json \
+--teacher_routing_key teacher_routing_key \
+--kd_algorithm vanilla_kd
+```
+
+See [Multi-Teacher KD](../user_guide/multi_teacher_kd.md) for details.
+
+## 6. Run SFT (no Ray)
 
 ```bash
 bash examples/sft/run_qwen3_4b.sh
@@ -112,7 +144,7 @@ torchrun --nproc_per_node=8 -m kdflow.cli.train_sft \
     --learning_rate 2e-5 --bf16 True ...
 ```
 
-## 6. Track your runs
+## 7. Track your runs
 
 All trainers integrate with **Weights & Biases**. Either:
 

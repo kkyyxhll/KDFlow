@@ -85,6 +85,9 @@ bash examples/off_policy_kd/run_qwen3_vl_30b_a3b_to_4b.sh
 See [Multimodal Distillation](multimodal.md) for what changes when the student
 or teacher is a VLM.
 
+For routing samples to multiple domain-specific teachers, see
+[Multi-Teacher KD](multi_teacher_kd.md).
+
 ## What runs under the hood
 
 1. The CLI calls `init_args("off_policy_kd")`, which parses
@@ -116,6 +119,7 @@ or teacher is a VLM.
 ## See also
 
 - [On-Policy KD](on_policy_kd.md) — same recipe but with student rollouts.
+- [Multi-Teacher KD](multi_teacher_kd.md) — route samples to domain-specific teachers.
 - [KD algorithms](../concepts/algorithms.md) — `vanilla_kd`, `simple_ctkd`, `dskd`.
 - [KD losses](../concepts/losses.md) — `kl`, `rkl`, `jsd`, `akl`, `skl`, `srkl`,
   `tvd`, `hrl`, `top1_ce`.
