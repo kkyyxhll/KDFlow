@@ -24,7 +24,7 @@ class PromptDataset(Dataset):
         self,
         dataset,
         strategy,
-        tokenizer_info: Optional[TokenizerCompareResult] = None,
+        tokenizer_info,
         max_data_num: int = None,
         input_template: Optional[str] = None,
         num_processors: int = 8,
@@ -35,7 +35,7 @@ class PromptDataset(Dataset):
         self.tokenizer_info = tokenizer_info or TokenizerCompareResult()
         self.template_identical = self.tokenizer_info.template_identical
         self.vocab_identical = self.tokenizer_info.vocab_identical
-        self.same_tokenizer = self.template_identical and self.vocab_identical
+        self.same_tokenizer = self.tokenizer_info.is_identical
         self.strategy = strategy
         self.input_template = input_template
         
@@ -48,16 +48,20 @@ class PromptDataset(Dataset):
         self.prompt_max_len = getattr(self.args.data, "prompt_max_len", 0)
 
         self.image_key = getattr(self.args.data, "image_key", None)
-        self.same_tokenizer = self.template_identical and self.vocab_identical
 
         # Load processor if multimodal
         self.student_processor = get_tokenizer_or_processor(
             self.args.model.student_name_or_path,
             need_processor=self.image_key is not None,
         )
-        self.teacher_processor = None
-        if self.args.model.teacher_name_or_path is not None:
-            self.teacher_processor = get_tokenizer_or_processor(
+        self.teacher_processors = {}
+        if self.args.kd.multi_teacher_config:
+            for teacher_key, teacher_path in self.args.kd.multi_teacher_config.items():
+                self.teacher_processors[teacher_key] = get_tokenizer_or_processor(
+                    teacher_path, need_processor=self.image_key is not None,
+                )
+        elif self.args.model.teacher_name_or_path is not None:
+            self.teacher_processors["default"] = get_tokenizer_or_processor(
                 self.args.model.teacher_name_or_path,
                 need_processor=self.image_key is not None,
             )
@@ -108,10 +112,22 @@ class PromptDataset(Dataset):
         stu_prompt = self._build_prompt(data, self.student_processor, self.input_key)
         
         # Build teacher prompt
-        if self.same_tokenizer and self.input_key == self.teacher_input_key:
+        if self.args.kd.multi_teacher_config:
+            routing_key = self.args.data.teacher_routing_key
+            assert routing_key is not None, "`--teacher_routing_key` must be specified when using multi_teacher_config"
+            assert routing_key in data, f"Routing key '{routing_key}' not found in data"
+            teacher_key = data[routing_key]
+            if teacher_key not in self.teacher_processors:
+                raise ValueError(
+                    f"Teacher routing key '{teacher_key}' not found in multi_teacher_config. "
+                    f"Available keys: {list(self.teacher_processors.keys())}."
+                )
+            teacher_processor = self.teacher_processors[teacher_key]
+            tea_prompt = self._build_prompt(data, teacher_processor, self.teacher_input_key)
+        elif self.same_tokenizer and self.input_key == self.teacher_input_key:
             tea_prompt = stu_prompt
         else:
-            tea_prompt = self._build_prompt(data, self.teacher_processor, self.teacher_input_key)
+            tea_prompt = self._build_prompt(data, self.teacher_processors.get("default", self.student_processor), self.teacher_input_key)
         
         # Compute prompt token length for filtering
         tokenizer = self.student_processor.tokenizer if hasattr(self.student_processor, "tokenizer") else self.student_processor
@@ -128,6 +144,13 @@ class PromptDataset(Dataset):
         # Load images if multimodal
         if self.image_key:
             result["images"] = self._load_images(data.get(self.image_key))
+            
+        # load teacher routing info of each data for multi-teacher distillation
+        if self.args.kd.multi_teacher_config is not None:
+            assert self.args.data.teacher_routing_key is not None, "`--teacher_routing_key` must be specified when using multi_teacher_config"
+            assert self.args.data.teacher_routing_key in data, f"Routing key '{self.args.data.teacher_routing_key}' not found in data"
+            result["teacher_routing_key"] = data[self.args.data.teacher_routing_key]
+            
         return result
     
     def _build_prompt(self, data: Dict, processor_or_tokenizer, input_key: str) -> str:
@@ -173,6 +196,8 @@ class PromptDataset(Dataset):
         }
         if "images" in item:
             result["images"] = item["images"]
+        if "teacher_routing_key" in item:
+            result["teacher_routing_key"] = item["teacher_routing_key"]
         return result
 
     @staticmethod

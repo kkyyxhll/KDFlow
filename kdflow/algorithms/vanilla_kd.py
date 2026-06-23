@@ -14,7 +14,31 @@ class VanillaKD:
         self.student = student_model
         self.teacher_lm_head = teacher_lm_head
         self.loss_fn = build_loss_fn(self.args.kd.kd_loss_fn, self.args)
-    
+
+    def compute_multi_teacher_logits(self, teacher_hiddens, teacher_loss_mask, routing_keys):
+        per_sample_counts = teacher_loss_mask.sum(dim=1).tolist()
+        splits = teacher_hiddens.split(per_sample_counts, dim=0)
+        teacher_to_indices = {}
+        for i, key in enumerate(routing_keys):
+            teacher_to_indices.setdefault(key, []).append(i)
+
+        logits_list = [None] * len(routing_keys)
+        streams = {key: torch.cuda.Stream() for key in teacher_to_indices}
+        for key, indices in teacher_to_indices.items():
+            with torch.cuda.stream(streams[key]):
+                lm_head = self.teacher_lm_head[key]
+                batched = torch.cat([splits[i] for i in indices], dim=0).to(lm_head.weight)
+                batched_logits = lm_head(batched)
+                sizes = [splits[i].shape[0] for i in indices]
+                per_sample_logits = batched_logits.split(sizes, dim=0)
+                for idx, i in enumerate(indices):
+                    logits_list[i] = per_sample_logits[idx]
+
+        for s in streams.values():
+            torch.cuda.current_stream().wait_stream(s)
+
+        return torch.cat(logits_list, dim=0)
+
     def training_step(self, micro_batch):
         student_input_ids = micro_batch["stu_input_ids"]
         student_attn_mask = micro_batch["stu_attn_mask"]
@@ -39,8 +63,13 @@ class VanillaKD:
         student_hiddens = output["hidden_states"][-1][student_loss_mask]
         del output
 
-        teacher_hiddens = teacher_hiddens.to(self.teacher_lm_head.weight)
-        teacher_logits = self.teacher_lm_head(teacher_hiddens)
+        if isinstance(self.teacher_lm_head, dict):  # multi-teacher distillation
+            teacher_logits = self.compute_multi_teacher_logits(
+                teacher_hiddens, teacher_loss_mask, micro_batch["teacher_routing_key"]
+            )
+        else:
+            teacher_hiddens = teacher_hiddens.to(self.teacher_lm_head.weight)
+            teacher_logits = self.teacher_lm_head(teacher_hiddens)
         
         student_logits = self.student.model.lm_head(student_hiddens)
         minV = min(teacher_logits.shape[-1], student_logits.shape[-1])

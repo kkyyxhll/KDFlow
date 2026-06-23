@@ -68,15 +68,17 @@ class OnPolicyKDTrainer:
             self.args.model.student_name_or_path,
             need_processor=self.image_key is not None,
         )
-        self.teacher_processor = None
-        if self.args.model.teacher_name_or_path:
-            if not self.is_same_tokenizer:
-                self.teacher_processor = get_tokenizer_or_processor(
-                    self.args.model.teacher_name_or_path,
-                    need_processor=self.image_key is not None,
+        self.teacher_processors = {}
+        if self.args.kd.multi_teacher_config:
+            for teacher_key, teacher_path in self.args.kd.multi_teacher_config.items():
+                self.teacher_processors[teacher_key] = get_tokenizer_or_processor(
+                    teacher_path, need_processor=self.image_key is not None,
                 )
-            else:
-                self.teacher_processor = self.student_processor
+        elif self.args.model.teacher_name_or_path and not self.is_same_tokenizer:
+            self.teacher_processors["default"] = get_tokenizer_or_processor(
+                self.args.model.teacher_name_or_path,
+                need_processor=self.image_key is not None,
+            )
         
         self.world_size = self.args.train.num_nodes * self.args.train.num_gpus_per_node
         self.dp_size = self.world_size // self.args.model.ring_attn_size
@@ -257,6 +259,7 @@ class OnPolicyKDTrainer:
         all_tea_prompts = [item["tea_prompt"] for item in prompt_batch]
         all_labels = [item["label"] for item in prompt_batch]
         all_images = [item.get("images") for item in prompt_batch] if self.image_key else None
+        all_teacher_routing_keys = [item.get("teacher_routing_key") for item in prompt_batch] if self.args.kd.multi_teacher_config else None
         
         # Expand prompt list based on the number of samples per prompt
         n_samples_per_prompt = self.args.rollout.n_samples_per_prompt
@@ -265,6 +268,8 @@ class OnPolicyKDTrainer:
         all_labels = sum([[label] * n_samples_per_prompt for label in all_labels], [])
         if all_images:
             all_images = sum([[imgs] * n_samples_per_prompt for imgs in all_images], [])
+        if all_teacher_routing_keys:
+            all_teacher_routing_keys = sum([[key] * n_samples_per_prompt for key in all_teacher_routing_keys], [])
         
         all_outputs = self.rollout_group.generate(all_stu_prompts, self.generate_kwargs, image_data=all_images)
 
@@ -285,6 +290,8 @@ class OnPolicyKDTrainer:
                 output=all_outputs[i],
                 label=all_labels[i],
                 images=all_images[i] if all_images and all_images[i] else None,
+                teacher_routing_key=all_teacher_routing_keys[i] \
+                if all_teacher_routing_keys and all_teacher_routing_keys[i] else None,
             )
             for i in range(len(all_outputs))
         ]
@@ -378,6 +385,14 @@ class OnPolicyKDTrainer:
 
         return result
 
+    def _get_teacher_processor(self, teacher_routing_key=None):
+        """Get the teacher processor for the given routing key."""
+        if teacher_routing_key and teacher_routing_key in self.teacher_processors:
+            return self.teacher_processors[teacher_routing_key]
+        if "default" in self.teacher_processors:
+            return self.teacher_processors["default"]
+        return self.student_processor
+
     def _build_rollout_sample(
         self,
         stu_prompt: str,
@@ -385,6 +400,7 @@ class OnPolicyKDTrainer:
         output,
         label: str,
         images=None,
+        teacher_routing_key=None,
     ) -> Dict[str, Any]:
         """
         Build a single rollout sample with both student and teacher tokenizations.
@@ -395,7 +411,7 @@ class OnPolicyKDTrainer:
             output: rollout output object
             label: Label string
             images: PIL images (or None for text-only).
-            
+            teacher_routing_key: Routed teacher key for multi-teacher distillation.
         Returns:
             Dict containing all sample fields
         """
@@ -408,8 +424,9 @@ class OnPolicyKDTrainer:
         )
         
         if not self.is_same_tokenizer or tea_prompt != stu_prompt:
+            teacher_processor = self._get_teacher_processor(teacher_routing_key)
             tea_tokens = self._tokenize_sample(
-                tea_prompt, response_text, self.teacher_processor, "tea", images=images
+                tea_prompt, response_text, teacher_processor, "tea", images=images
             )
         else:
             tea_tokens = {
@@ -422,7 +439,8 @@ class OnPolicyKDTrainer:
         total_length = stu_tokens["stu_attn_mask"].float().sum()
         
         # Build tea_full_text for teacher actor (SGLang engine uses raw text)
-        tokenizer = getattr(self.teacher_processor, "tokenizer", self.teacher_processor)
+        teacher_processor = self._get_teacher_processor(teacher_routing_key)
+        tokenizer = getattr(teacher_processor, "tokenizer", teacher_processor)
         tea_full_text = tea_prompt + response_text + " " + tokenizer.eos_token
 
         sample = {
@@ -442,6 +460,8 @@ class OnPolicyKDTrainer:
             sample["stu_multi_modal_inputs"] = [stu_mm]
         if images:
             sample["images"] = [images]
+        if teacher_routing_key is not None:
+            sample["teacher_routing_key"] = teacher_routing_key
         return sample
             
     def logging(self):

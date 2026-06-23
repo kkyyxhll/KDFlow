@@ -31,7 +31,8 @@ _SCALAR_KEYS = {"response_length", "total_length"}
 
 # Keys that are plain python lists (one element per sample)
 _LIST_KEYS = {"tea_full_texts", "stu_prompts", "stu_responses", "tea_prompts",
-              "labels", "images", "stu_multi_modal_inputs", "tea_multi_modal_inputs"}
+              "labels", "images", "stu_multi_modal_inputs", "tea_multi_modal_inputs",
+              "teacher_routing_key"}
 
 # Keys whose values are concatenated response-level tensors [total_resp_tokens, ...]
 # that must be split per sample using tea_loss_mask counts.

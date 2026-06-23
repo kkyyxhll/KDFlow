@@ -3,13 +3,14 @@ import math
 
 import ray
 
+from kdflow.ray.train.multi_teacher_group import MultiTeacherActorGroup
 from kdflow.ray.train.teacher_group import TeacherActorGroup
 from kdflow.ray.train.student_group import StudentActorGroup
 from kdflow.ray.placement_group import create_placement_group
 from kdflow.trainer import OffPolicyKDTrainer
 from kdflow.datasets import SFTDataset
 from kdflow.datasets.utils import blending_datasets
-from kdflow.models.utils import check_tokenizer_identical
+from kdflow.models.utils import check_tokenizer_identical, TokenizerCompareResult
 from kdflow.backend import get_strategy
 from kdflow.arguments import init_args
 from kdflow.utils.distributed_sampler import DistributedSampler
@@ -37,11 +38,12 @@ def train(args):
     pg, reordered_bundle_indices, reordered_gpu_ids = create_placement_group(num_gpus)
     strategy.print(f"Placement group ready with {num_gpus} GPUs")
     
-    teacher_model = TeacherActorGroup(
+    TeacherGroupCLS = MultiTeacherActorGroup if args.kd.multi_teacher_config else TeacherActorGroup
+    teacher_model = TeacherGroupCLS(
         strategy,
         num_gpus,
         num_gpus_per_node=args.train.num_gpus_per_node,
-        num_gpus_per_actor=0.4,
+        num_gpus_per_actor=0.01,
         pg=(pg, reordered_bundle_indices, reordered_gpu_ids),
     )
     student_model = StudentActorGroup(
@@ -49,7 +51,7 @@ def train(args):
         args.train.num_nodes,
         args.train.num_gpus_per_node,
         pg=pg,
-        num_gpus_per_actor=0.6,
+        num_gpus_per_actor=0.01,
     )
     
     # Initialize tokenizers
@@ -57,14 +59,27 @@ def train(args):
         args.model.student_name_or_path,
         use_fast=not args.model.disable_fast_tokenizer
     )
-    teacher_tokenizer = get_tokenizer(
-        args.model.teacher_name_or_path,
-        use_fast=not args.model.disable_fast_tokenizer
-    )
-    tokenizer_info = check_tokenizer_identical(student_tokenizer, teacher_tokenizer)
-    strategy.print(f"Tokenizers {tokenizer_info}")
-    if not tokenizer_info.vocab_identical and args.kd.kd_algorithm not in  ["dskd", "simple_ctkd"]:
-        raise ValueError("Student and teacher tokenizers are not identical. Please use DSKD or SimpleCrossToknizerKD algorithm for cross-tokenizer KD or ensure tokenizers are the same.")
+    if args.kd.multi_teacher_config:
+        tokenizer_info = TokenizerCompareResult()
+        for teacher_key, teacher_name_or_path in args.kd.multi_teacher_config.items():
+            teacher_tokenizer = get_tokenizer(teacher_name_or_path, use_fast=not args.model.disable_fast_tokenizer)
+            cur_tokenizer_info = check_tokenizer_identical(student_tokenizer, teacher_tokenizer)
+            if not cur_tokenizer_info.vocab_identical:
+                raise ValueError(
+                    f"Teacher model '{teacher_key}' has a different vocabulary from the student. "
+                    f"Multi-teacher KD requires all teachers to share the same vocabulary as the student."
+                )
+            tokenizer_info.template_identical = tokenizer_info.template_identical and cur_tokenizer_info.template_identical
+        strategy.print(f"Tokenizers {tokenizer_info}")
+    else:
+        teacher_tokenizer = get_tokenizer(
+            args.model.teacher_name_or_path,
+            use_fast=not args.model.disable_fast_tokenizer
+        )
+        tokenizer_info = check_tokenizer_identical(student_tokenizer, teacher_tokenizer)
+        strategy.print(f"Tokenizers {tokenizer_info}")
+        if not tokenizer_info.vocab_identical and args.kd.kd_algorithm not in ["dskd", "simple_ctkd"]:
+            raise ValueError("Student and teacher tokenizers are not identical. Please use DSKD or SimpleCrossToknizerKD algorithm for cross-tokenizer KD or ensure tokenizers are the same.")
     
     # Load and prepare training dataset
     train_data = blending_datasets(
@@ -125,7 +140,7 @@ def train(args):
     # Initialize student model on all workers
     ray.get(student_model.async_init_model_from_pretrained(
         strategy, max_steps, 
-        teacher_tokenizer=teacher_tokenizer, 
+        teacher_tokenizer=teacher_tokenizer if not args.kd.multi_teacher_config else student_tokenizer, 
         tokenizer_info=tokenizer_info,
     ))
     

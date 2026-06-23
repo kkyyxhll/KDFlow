@@ -130,7 +130,13 @@ class StudentRayActor:
             self.student.gradient_checkpointing_enable()
             
         # load teacher lm_head for later logits calculation in the algorithm (logits = lm_head(hidden))
-        self.teacher_lm_head = self.load_only_lm_head(strategy.args.model.teacher_name_or_path)
+        if self.args.kd.multi_teacher_config is not None:
+            self.teacher_lm_head = {
+                key: self.load_only_lm_head(self.args.kd.multi_teacher_config[key])
+                for key in self.args.kd.multi_teacher_config
+            }
+        else:
+            self.teacher_lm_head = self.load_only_lm_head(strategy.args.model.teacher_name_or_path)
 
         # Initialize KD algorithm without teacher model
         # Teacher hiddens will be passed in each micro_batch during training
@@ -355,13 +361,19 @@ class StudentRayActor:
     def wakeup(self):
         """Reload optimizer states from CPU to GPU."""
         self.strategy.reload_model_params(self.student)
-        self.teacher_lm_head = self.teacher_lm_head.cuda()
+        if isinstance(self.teacher_lm_head, dict):
+            self.teacher_lm_head = {k: v.cuda() for k, v in self.teacher_lm_head.items()}
+        else:
+            self.teacher_lm_head = self.teacher_lm_head.cuda()
         self.strategy.reload_optim_states(self.optim)
 
     def sleep(self):
         """Offload optimizer states from GPU to CPU to save memory."""
         self.strategy.offload_optim_states(self.optim)
-        self.teacher_lm_head = self.teacher_lm_head.cpu()
+        if isinstance(self.teacher_lm_head, dict):
+            self.teacher_lm_head = {k: v.cpu() for k, v in self.teacher_lm_head.items()}
+        else:
+            self.teacher_lm_head = self.teacher_lm_head.cpu()
         self.strategy.offload_model_params(self.student, empty_cache=True)
 
     def save_checkpoint(self, tag, client_states):

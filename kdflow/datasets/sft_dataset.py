@@ -45,7 +45,7 @@ class SFTDataset(Dataset):
         self.enable_thinking = getattr(self.args.model, "enable_thinking", False)
 
         self.image_key = getattr(self.args.data, "image_key", None)
-        self.same_tokenizer = self.template_identical and self.vocab_identical
+        self.same_tokenizer = True if tokenizer_info is None else self.tokenizer_info.is_identical
         self.teacher_student_share_input = self.same_tokenizer and (self.teacher_input_key == self.input_key)
         
         self.student_processor = get_tokenizer_or_processor(
@@ -54,14 +54,17 @@ class SFTDataset(Dataset):
         )
         # extract tokenizer in hf processor
         self.student_tokenizer = getattr(self.student_processor, "tokenizer", self.student_processor)
-        self.teacher_processor = None
-        self.teacher_tokenizer = None
-        if self.args.model.teacher_name_or_path is not None:
-            self.teacher_processor = get_tokenizer_or_processor(
+        self.teacher_processors = {}
+        if self.args.kd.multi_teacher_config:
+            for teacher_key, teacher_path in self.args.kd.multi_teacher_config.items():
+                self.teacher_processors[teacher_key] = get_tokenizer_or_processor(
+                    teacher_path, need_processor=self.image_key is not None,
+                )
+        elif self.args.model.teacher_name_or_path is not None:
+            self.teacher_processors["default"] = get_tokenizer_or_processor(
                 self.args.model.teacher_name_or_path,
                 need_processor=self.image_key is not None,
             )
-            self.teacher_tokenizer = getattr(self.teacher_processor, "tokenizer", self.teacher_processor)
 
         if max_data_num > 0 and max_data_num < len(dataset):
             self.strategy.log(f"Truncating dataset from {len(dataset)} to {max_data_num}")
@@ -100,7 +103,7 @@ class SFTDataset(Dataset):
             self.strategy.print(sample["tea_prompt"] + sample["tea_response"])
 
     def process_data(self, data: Dict) -> Dict[str, Any]:
-        stu_chat_template_fn = self.student_processor.apply_chat_template
+        stu_chat_template_fn = self.student_processor.apply_chat_template if self.apply_chat_template else None
         stu_prompt, stu_response = self.preprocess_data(
             data, self.input_template, self.input_key, self.output_key,
             apply_chat_template=stu_chat_template_fn,
@@ -120,25 +123,46 @@ class SFTDataset(Dataset):
         if self.image_key is not None:
             result["images"] = self.load_images(data[self.image_key])
 
-        if self.args.model.teacher_name_or_path is not None:
+        if self.args.model.teacher_name_or_path is not None \
+        or self.args.kd.multi_teacher_config is not None:
             if not self.teacher_student_share_input:
-                tea_chat_template_fn = self.teacher_processor.apply_chat_template
+                # Select the appropriate teacher processor
+                if self.args.kd.multi_teacher_config is not None:
+                    routing_key = self.args.data.teacher_routing_key
+                    assert routing_key is not None, "`--teacher_routing_key` must be specified when using multi_teacher_config"
+                    assert routing_key in data, f"Routing key '{routing_key}' not found in data"
+                    teacher_key = data[routing_key]
+                    if teacher_key not in self.teacher_processors:
+                        raise ValueError(
+                            f"Teacher routing key '{teacher_key}' not found in multi_teacher_config. "
+                            f"Available keys: {list(self.teacher_processors.keys())}."
+                        )
+                    teacher_processor = self.teacher_processors[teacher_key]
+                else:
+                    teacher_processor = self.teacher_processors.get("default", self.student_processor)
+                cur_teacher_tokenizer = getattr(teacher_processor, "tokenizer", teacher_processor)
+
+                tea_chat_template_fn = teacher_processor.apply_chat_template if self.apply_chat_template else None
                 tea_prompt, tea_response = self.preprocess_data(
                     data, self.input_template, self.teacher_input_key, self.output_key,
                     apply_chat_template=tea_chat_template_fn,
                 )
-                tea_eos_token = self.teacher_tokenizer.eos_token
+                tea_eos_token = cur_teacher_tokenizer.eos_token
                 if not tea_response.endswith(tea_eos_token):
                     tea_response += " " + tea_eos_token
                 result["tea_prompt"] = tea_prompt
                 result["tea_response"] = tea_response
-                result["tea_resp_len"] = self._compute_token_length(
-                    self.teacher_processor, tea_response
-                )
+                result["tea_resp_len"] = self._compute_token_length(teacher_processor, tea_response)
             else:
                 result["tea_prompt"] = stu_prompt
                 result["tea_response"] = stu_response
                 result["tea_resp_len"] = result["stu_resp_len"]
+
+        # load teacher routing info of each data for multi-teacher distillation
+        if self.args.kd.multi_teacher_config is not None:
+            assert self.args.data.teacher_routing_key is not None, "`--teacher_routing_key` must be specified when using multi_teacher_config"
+            assert self.args.data.teacher_routing_key in data, f"Routing key '{self.args.data.teacher_routing_key}' not found in data"
+            result["teacher_routing_key"] = data[self.args.data.teacher_routing_key]
 
         return result
     
@@ -259,11 +283,21 @@ class SFTDataset(Dataset):
         if "tea_prompt" in item_list[0]:
             if not self.teacher_student_share_input:
                 tea_full = [item["tea_prompt"] + item["tea_response"] for item in item_list]
-                tea_encs = [
-                    self._encode_single(self.teacher_processor, tea_full[i], per_sample_images[i])
-                    for i in range(bsz)
-                ]
-                tea_pad_id = self.teacher_tokenizer.pad_token_id
+                # Select per-sample teacher processor for encoding
+                tea_encs = []
+                for i in range(bsz):
+                    if self.args.kd.multi_teacher_config and "teacher_routing_key" in item_list[i]:
+                        proc = self.teacher_processors[item_list[i]["teacher_routing_key"]]
+                    else:
+                        proc = self.teacher_processors.get("default", self.student_processor)
+                    tea_encs.append(self._encode_single(proc, tea_full[i], per_sample_images[i]))
+                if self.args.kd.multi_teacher_config:
+                    # Multi-teacher mode validates shared vocab with the student.
+                    tea_pad_id = self.student_tokenizer.pad_token_id
+                else:
+                    teacher_processor = self.teacher_processors.get("default", self.student_processor)
+                    teacher_tokenizer = getattr(teacher_processor, "tokenizer", teacher_processor)
+                    tea_pad_id = teacher_tokenizer.pad_token_id
                 tea_input_ids = zero_pad_sequences(
                     [e["input_ids"] for e in tea_encs], side="right", value=tea_pad_id,
                 )
@@ -290,5 +324,8 @@ class SFTDataset(Dataset):
 
         if self.image_key:
             batch["images"] = per_sample_images
+            
+        if "teacher_routing_key" in item_list[0]:
+            batch["teacher_routing_key"] = [item["teacher_routing_key"] for item in item_list]
 
         return batch

@@ -41,6 +41,7 @@ class TeacherActorGroup:
         num_gpus_per_node: int = 8,
         num_gpus_per_actor: float = 0.2,
         pg: Optional[Union[PlacementGroup, Tuple[PlacementGroup, list, list]]] = None,
+        teacher_name_or_path: str = None,
     ):
         """
         Initialize TeacherActorGroup.
@@ -51,8 +52,8 @@ class TeacherActorGroup:
             num_gpus_per_node: Number of GPUs per physical node
             num_gpus_per_actor: Ray GPU resources per actor (fractional for co-location)
             pg: 3-tuple (pg, reordered_bundle_indices, reordered_gpu_ids), PlacementGroup, or None
+            teacher_name_or_path: Name or path of the teacher model (for multi-teacher distillation)
         """
-        logger.info("[TeacherActorGroup] Starting initialization...")
         self.teacher_engines = []
         self._worker_actors = []
         self.strategy = strategy
@@ -60,6 +61,8 @@ class TeacherActorGroup:
         self.tp_size = strategy.args.kd.teacher_tp_size
         self.pp_size = strategy.args.kd.teacher_pp_size
         self.num_gpus_per_node = num_gpus_per_node
+        self.teacher_name_or_path = teacher_name_or_path or strategy.args.model.teacher_name_or_path
+        logger.info(f"[TeacherActorGroup] Start to initialize the teacher from {self.teacher_name_or_path}...")
         
         # Parse PG info (same pattern as RolloutActorGroup)
         if pg is not None and isinstance(pg, tuple):
@@ -131,6 +134,7 @@ class TeacherActorGroup:
                         nnodes=nnodes_per_engine,
                         node_rank=node_idx,
                         dist_init_addr=dist_init_addr,
+                        teacher_name_or_path=self.teacher_name_or_path
                     )
                     engine_actors.append(actor)
                 
@@ -162,7 +166,9 @@ class TeacherActorGroup:
                         placement_group_bundle_index=self._reordered_bundle_indices[i * num_gpu_per_engine],
                     )
                 
-                actor = TeacherRayActor.options(**options).remote(self.strategy, base_gpu_id)
+                actor = TeacherRayActor.options(**options).remote(
+                    self.strategy, base_gpu_id, teacher_name_or_path=self.teacher_name_or_path
+                )
                 
                 self.teacher_engines.append(actor)
             logger.info(f"[TeacherActorGroup] Actor {i} created, waiting for ready...")

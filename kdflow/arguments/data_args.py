@@ -47,6 +47,10 @@ class DataArguments:
         default=None,
         metadata={"help": "Label key in dataset."}
     )
+    teacher_routing_key: str = field(
+        default="teacher_routing_key",
+        metadata={"help": "Route key for teacher model in multi-teacher distillation."}
+    )
     input_template: str = field(
         default=None,
     )

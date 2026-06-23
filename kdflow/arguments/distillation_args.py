@@ -72,6 +72,10 @@ class DistillationArguments:
         default=0.999,
         metadata={"help": "EMA decay for teacher model."}
     )
+    multi_teacher_config: str = field(
+        default=None,
+        metadata={"help": "Path to the JSON file of the routing key and name_or_path of multiple teacher models."}
+    )
     # DSKD hyperparameters
     dskd_token_align: str = field(
         default="eta",

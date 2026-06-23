@@ -1,3 +1,4 @@
+import json
 from dataclasses import dataclass, field
 
 from transformers import HfArgumentParser
@@ -91,6 +92,25 @@ def init_args(scenario: str = "sft"):
             args.data.packing_samples = False
 
     total_gpus = args.train.num_nodes * args.train.num_gpus_per_node
+
+    if args.kd.multi_teacher_config is not None:
+        try:
+            with open(args.kd.multi_teacher_config, "r", encoding="utf-8") as f:
+                args.kd.multi_teacher_config = json.load(f)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"`--multi_teacher_config` must be a valid JSON file: {args.kd.multi_teacher_config}") from e
+        if not isinstance(args.kd.multi_teacher_config, dict) or not args.kd.multi_teacher_config:
+            raise ValueError("`--multi_teacher_config` must be a non-empty JSON object mapping teacher keys to model paths.")
+        if args.model.teacher_name_or_path is not None:
+            logger.warning(
+                "Detect `--multi_teacher_config` is set, `--teacher_name_or_path` will be set to None automatically."
+            )
+            args.model.teacher_name_or_path = None
+        if args.kd.kd_algorithm != "vanilla_kd":
+            raise ValueError(
+                "Multi-teacher distillation currently only supports `vanilla_kd`, "
+                f"got `{args.kd.kd_algorithm}`."
+            )
     
     if scenario == "on_policy_kd":
         if total_gpus % args.rollout.rollout_tp_size != 0:
@@ -114,7 +134,14 @@ def init_args(scenario: str = "sft"):
                 f"Automatically increase --max_len to {args.data.max_len}."
             )
     
-    if scenario in ("off_policy_kd", "on_policy_kd") and args.model.teacher_name_or_path is not None:
+    has_teacher = args.model.teacher_name_or_path is not None or args.kd.multi_teacher_config is not None
+    is_kd_scenario = scenario in ("off_policy_kd", "on_policy_kd")
+    if is_kd_scenario:
+        if not has_teacher:
+            raise ValueError(
+                "KD scenario requires either `--teacher_name_or_path` or `--multi_teacher_config` to be set."
+            )
+
         teacher_parallel = args.kd.teacher_tp_size * args.kd.teacher_pp_size
         if total_gpus % teacher_parallel != 0:
             raise ValueError(
@@ -149,5 +176,5 @@ def init_args(scenario: str = "sft"):
             "and will be removed in a future version. Use --enable_sleep instead."
         )
         args.train.enable_sleep = True
-    
+
     return args

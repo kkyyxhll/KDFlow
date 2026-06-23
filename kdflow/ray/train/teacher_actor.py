@@ -22,7 +22,15 @@ class TeacherRayActor:
     - This allows Teacher and Student to share the same GPUs via PlacementGroup
     """
     
-    def __init__(self, strategy, base_gpu_id: int = 0, nnodes: int = 1, node_rank: int = 0, dist_init_addr: str = None):
+    def __init__(
+        self, 
+        strategy, 
+        base_gpu_id: int = 0, 
+        nnodes: int = 1, 
+        node_rank: int = 0, 
+        dist_init_addr: str = None,
+        teacher_name_or_path: str = None,
+    ):
         """
         Initialize TeacherRayActor.
         
@@ -33,6 +41,7 @@ class TeacherRayActor:
             nnodes: Number of nodes for multi-node tp/pp
             node_rank: Rank of this node in tp+pp group
             dist_init_addr: Address for distributed initialization
+            teacher_name_or_path: Name or path of the teacher model (default to args.model.teacher_name_or_path)
         """
         logger.info(f"[TeacherRayActor] __init__ STARTED, PID={os.getpid()}, base_gpu_id={base_gpu_id}")
         
@@ -42,6 +51,7 @@ class TeacherRayActor:
         self.pp_size = strategy.args.kd.teacher_pp_size
         self.base_gpu_id = base_gpu_id
         self.node_rank = node_rank
+        self.teacher_name_or_path = teacher_name_or_path
         
         # Disable tokenizers parallelism to avoid deadlock with multiprocessing
         os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -49,7 +59,7 @@ class TeacherRayActor:
         # Create engine configuration
         # GPU binding is handled by base_gpu_id (works with RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES)
         self.engine_config = EngineConfig(
-            model_path=strategy.args.model.teacher_name_or_path,
+            model_path=self.teacher_name_or_path,
             tp_size=self.tp_size,
             ep_size=self.ep_size,
             pp_size=self.pp_size,
