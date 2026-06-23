@@ -116,19 +116,34 @@ class OnPolicyKDTrainer:
     
     def _print_training_config(self) -> None:
         """Log training configuration before training starts."""
-        total_steps = self.max_rollout_iters
+        num_data = len(getattr(self.train_dataloader, "dataset", self.train_dataloader))
+        num_update_per_rollout = self.args.rollout.n_samples_per_prompt * self.args.rollout.rollout_batch_size \
+            // self.args.train.train_batch_size
+        total_steps = self.max_rollout_iters * num_update_per_rollout
         grad_accum = self.args.train.train_batch_size * self.args.model.ring_attn_size \
             // (self.args.train.micro_train_batch_size * self.args.train.num_nodes * self.args.train.num_gpus_per_node)
+
+        def log_config(name, value):
+            logger.info(f"  {name:<32} {value}")
         
         logger.info("******* Start Training *******")
-        logger.info(f"  Num Epochs:            {self.epochs}")
-        logger.info(f"  Steps per Epoch:       {self.num_rollout_iters_per_epoch}")
-        logger.info(f"  Total Training Steps:  {total_steps}")
-        logger.info(f"  Per-device Batch Size: {self.args.train.micro_train_batch_size}")
-        logger.info(f"  Gradient Accumulation: {grad_accum}")
-        logger.info(f"  Learning Rate:         {self.args.train.learning_rate}")
-        logger.info(f"  KD Algorithm:          {self.args.kd.kd_algorithm}")
-        logger.info(f"  KD Loss Function:      {self.args.kd.kd_loss_fn}")
+        log_config("Num GPUs:", self.world_size)
+        log_config("Num Data:", num_data)
+        log_config("Num Epochs:", self.epochs)
+        log_config("Rollout Iterations Per Epoch:", self.num_rollout_iters_per_epoch)
+        log_config("Total Rollout Iterations:", self.max_rollout_iters)
+        log_config("Num Updates Per Rollout:", num_update_per_rollout)
+        log_config("Total Num Updates:", total_steps)
+        if self.args.train.use_dynamic_bsz:
+            log_config("Enable Dynamic Batch Size:", self.args.train.use_dynamic_bsz)
+            log_config("Max Token Len Per GPU:", self.args.train.max_token_len_per_gpu)
+            log_config("Gradient Accumulation:", "dynamic")
+        else:
+            log_config("Per-device Batch Size:", self.args.train.micro_train_batch_size)
+            log_config("Gradient Accumulation:", grad_accum)
+        log_config("Learning Rate:", self.args.train.learning_rate)
+        log_config("KD Algorithm:", self.args.kd.kd_algorithm)
+        log_config("KD Loss Function:", self.args.kd.kd_loss_fn)
     
     def fit(self, global_step=0, start_epoch=0):
         self.global_step = global_step

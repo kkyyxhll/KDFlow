@@ -41,8 +41,6 @@ def check_tokenizer_identical(
     chat_template2 = getattr(tokenizer2, "chat_template", None)
     if chat_template1 != chat_template2:
         logger.warning("Tokenizers differ in chat_template.")
-        logger.info(f"Chat template 1: {chat_template1}")
-        logger.info(f"Chat template 2: {chat_template2}")
         result.template_identical = False
 
     # Compare vocabulary
