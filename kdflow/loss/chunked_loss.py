@@ -6,6 +6,7 @@ def chunked_loss(
     student_hidden: torch.Tensor,
     student_head: torch.nn.Module,
     loss_fn: Callable[..., torch.Tensor],
+    student_logits_fn: Optional[Callable[..., torch.Tensor]] = None,
     teacher_hidden: Optional[torch.Tensor] = None,
     teacher_head: Optional[torch.nn.Module] = None,
     teacher_logits_fn: Optional[Callable[[int, int], torch.Tensor]] = None,
@@ -35,7 +36,10 @@ def chunked_loss(
 
     for start in range(0, student_hidden.shape[0], chunk_size):
         end = start + chunk_size
-        student_logits = student_head(student_hidden[start:end], skip=False)
+        if student_logits_fn is not None:
+            student_logits = student_logits_fn(student_hidden[start:end], skip=False)
+        else:
+            student_logits = student_head(student_hidden[start:end], skip=False)
         has_teacher_logits = False
 
         if teacher_logits_fn is not None:
