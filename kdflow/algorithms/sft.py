@@ -2,6 +2,7 @@ import torch
 import torch.nn.functional as F
 
 from kdflow.algorithms import register_algorithm
+from kdflow.loss.chunked_loss import chunked_loss
 from kdflow.loss.cross_entropy import compute_cross_entropy
 
 
@@ -29,12 +30,20 @@ class SFT:
         )
         student_hiddens = output["hidden_states"][-1][student_loss_mask]
         del output
-        student_logits = self.student.model.lm_head(student_hiddens)
-        
-        loss_info = {}
-        V = student_logits.shape[-1]
+
         student_label_ids = student_input_ids.roll(shifts=-1, dims=1)[student_loss_mask]
-        ce_loss = compute_cross_entropy(student_logits, student_label_ids, reduction="sum") / avg_token_num
+
+        chunk_size = self.args.train.chunked_loss_size
+        if chunk_size is not None:
+            ce_loss = chunked_loss(
+                student_hiddens, self.student.model.lm_head, compute_cross_entropy,
+                label=student_label_ids, chunk_size=chunk_size, reduction="sum"
+            ) / avg_token_num
+        else:
+            student_logits = self.student.model.lm_head(student_hiddens)
+            ce_loss = compute_cross_entropy(student_logits, student_label_ids, reduction="sum") / avg_token_num
+
+        loss_info = {}
         loss = ce_loss
         loss_info["loss"] = loss
         loss_info["ce_loss"] = ce_loss
