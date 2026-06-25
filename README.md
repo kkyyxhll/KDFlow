@@ -62,6 +62,7 @@
 - **Teacher on SGLang** — Teacher inference is powered by SGLang Engine, enabling high-throughput prefilling and flexible parallel strategies.
 - **Pluggable KD Algorithms** — Built-in support for Vanilla KD and DSKD (Dual-Space Knowledge Distillation), with easy registration of custom algorithms.
 - **Multiple Loss Functions** — Torch compiled KL divergence, Reverse KL divergence, JS divergence, Adaptive KL (AKL), etc.
+- **Chunked Loss** — Memory-efficient loss computation that processes logits in small token chunks, avoiding full logits materialization (enabled via `--chunked_loss_size`).
 - **LoRA Support** — Optional LoRA fine-tuning for the student model.
 - **Wand&b Integration** — Built-in wand&b logging for experiment tracking.
 - **High Training Efficiency** — Achieves **1.4x to 6x** faster distillation compared to mainstream knowledge distillation frameworks.

@@ -63,6 +63,7 @@ Defined in `kdflow/arguments/training_args.py`.
 | `--bf16`                       | `False`                  | Enable bfloat16 training                                          |
 | `--use_dynamic_bsz`            | `False`                  | Enable dynamic batch size based on token count per GPU            |
 | `--max_token_len_per_gpu`      | `0`                      | Max total tokens per micro-batch when `use_dynamic_bsz=True`      |
+| `--chunked_loss_size`          | `None`                   | Token chunk size for chunked loss computation. If not `None`, logits and the corresponding loss will be computed chunk by chunk to reduce GPU memory. See [Chunked Loss](../concepts/losses.md#chunked-loss-memory-efficient-computation). |
 
 ---
 

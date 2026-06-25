@@ -52,6 +52,77 @@ A few losses have their own dials, settable on the CLI:
 --hrl_topk 5
 ```
 
+## Chunked Loss (Memory-Efficient Computation)
+
+When distilling from large teacher models, materializing the full logits
+tensor (shape `[num_tokens, vocab_size]`) can easily exhaust GPU memory —
+especially with vocabularies of 100k+ tokens and long sequences.
+
+KDFlow provides a **chunked loss** mechanism (`kdflow/loss/chunked_loss.py`)
+that computes the loss in small token-level chunks without ever materializing
+the full logits tensor. This is a **pure memory optimization** — the computed
+loss is mathematically equivalent to the non-chunked version.
+
+### How it works
+
+```
+student_hidden: [N, hidden_size]
+                    │
+                    ▼  (chunk_size tokens at a time)
+            ┌───────────────┐
+            │ student_head() │──► student_logits [chunk_size, vocab]
+            └───────────────┘
+            ┌───────────────┐
+            │ teacher_head() │──► teacher_logits [chunk_size, vocab]
+            └───────────────┘
+                    │
+                    ▼
+              loss_fn(student_logits, teacher_logits)
+                    │
+                    ▼
+            accumulate / concatenate
+```
+
+At each step, only one chunk of logits lives on GPU. The `lm_head` forward
+pass is computed per-chunk, and the loss is accumulated (for `sum` / `mean`
+reduction) or concatenated (for `none` reduction).
+
+### Enabling chunked loss
+
+Set `--chunked_loss_size <N>` in your training command:
+
+```bash
+# Process 2048 tokens at a time (recommended starting point)
+--chunked_loss_size 2048
+```
+
+When `--chunked_loss_size` is `None` (default), chunked loss is disabled and
+the full logits are materialized as before.
+
+### Supported reductions
+
+| `reduction` | Behavior                                                                 |
+|-------------|--------------------------------------------------------------------------|
+| `none`      | Returns per-token loss tensor `[N]` (chunks are concatenated).           |
+| `sum`       | Returns scalar sum of all token losses.                                  |
+| `mean`      | Returns scalar mean (sum divided by total token count).                  |
+
+### When to use it
+
+- **Large vocabularies** (e.g., 150k+ tokens) where logits consume significant memory.
+- **Long sequences** where the total token count per micro-batch is high.
+- **Limited GPU memory** — chunked loss trades compute time for memory savings.
+
+### Performance notes
+
+- Chunked loss adds a small overhead due to multiple `lm_head` forward passes
+  instead of one batched call. In practice, the overhead is negligible compared
+  to the main model forward/backward pass.
+- The `lm_head` is marked as `skip=True` during the main student forward pass
+  (avoiding redundant computation), and only invoked inside `chunked_loss`.
+
+---
+
 ## Implementing your own loss
 
 Add a file under `kdflow/loss/` and register it; see
