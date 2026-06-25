@@ -12,15 +12,15 @@ class RolloutArguments:
     )
     rollout_tp_size: int = field(
         default=1,
-        metadata={"help": "Tensor parallel size for each vLLM engine."}
+        metadata={"help": "Tensor parallel size for each rollout engine."}
     )
     rollout_enable_sleep: bool = field(
         default=False,
-        metadata={"help": "Enable sleep mode for vLLM."}
+        metadata={"help": "Enable sleep mode for rollout engines."}
     )
     rollout_mem_fraction_static: float = field(
         default=0.6,
-        metadata={"help": "GPU memory utilization for each vLLM engine."}
+        metadata={"help": "GPU memory utilization for each rollout engine."}
     )
     top_p: float = field(
         default=1.0,
