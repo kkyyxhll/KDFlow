@@ -114,6 +114,10 @@ class TrainingArguments:
         default=int(os.getenv("LOCAL_RANK", -1)),
         metadata={"help": "Local rank for distributed training. Automatically set."}
     )
+    chunked_loss_size: int = field(
+        default=None,
+        metadata={"help": "Token chunk size for chunked loss. If None, chunked loss is disabled."}
+    )
     
     def __post_init__(self):
         backend_choices = self.__class__.__dataclass_fields__["backend"].metadata["choices"]

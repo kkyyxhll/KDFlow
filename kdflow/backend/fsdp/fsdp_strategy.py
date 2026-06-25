@@ -176,6 +176,17 @@ class FSDP2Strategy(ABC):
                 attn_implementation=attn_impl,
                 torch_dtype=torch.bfloat16 if self.args.train.bf16 else "auto",
             )
+        # When chunked loss is enabled, lm_head defaults to identity so that the
+        # original HF forward does not materialize full-sequence logits.
+        # Explicit logits computation must call `lm_head(hidden, skip=False)`.  
+        if self.args.train.chunked_loss_size is not None and hasattr(model, "lm_head"):
+            original_forward = model.lm_head.forward
+            def skip_forward(x, skip=True):
+                if skip:
+                    return x
+                return original_forward(x)
+            model.lm_head.forward = skip_forward
+            self.log("Chunked loss enabled, lm_head forward set to skippable mode for student model.")
         return model
     
     def _get_init_weight_context_manager(self, model_config):
@@ -200,7 +211,7 @@ class FSDP2Strategy(ABC):
             # Rank 0: CPU, others: meta device (memory efficient for large models)
             return init_empty_weights if not self.is_rank_0() else cpu_init_weights
         else:
-            self.log(f"[Rank {dist.get_rank()}] tie_word_embeddings=True, loading full model to CPU on all ranks")
+            self.log("tie_word_embeddings=True, loading full model to CPU on all ranks")
             return cpu_init_weights
     
     def prepare(self, model: nn.Module, *args, **kwargs):

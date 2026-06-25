@@ -3,6 +3,7 @@ import torch.nn.functional as F
 
 from kdflow.loss import build_loss_fn
 from kdflow.algorithms import register_algorithm
+from kdflow.loss.chunked_loss import chunked_loss
 from kdflow.loss.cross_entropy import compute_cross_entropy
 
 
@@ -15,12 +16,18 @@ class VanillaKD:
         self.teacher_lm_head = teacher_lm_head
         self.loss_fn = build_loss_fn(self.args.kd.kd_loss_fn, self.args)
 
-    def compute_multi_teacher_logits(self, teacher_hiddens, teacher_loss_mask, routing_keys):
+    def compute_multi_teacher_logits(self, teacher_hiddens, teacher_loss_mask, routing_keys, start=None, end=None):
         per_sample_counts = teacher_loss_mask.sum(dim=1).tolist()
         splits = teacher_hiddens.split(per_sample_counts, dim=0)
+        if start is not None or end is not None:
+            start = 0 if start is None else start
+            end = teacher_hiddens.shape[0] if end is None else end
+            offsets = torch.tensor([0] + per_sample_counts, device=teacher_hiddens.device).cumsum(0).tolist()
+            splits = [x[max(start - offsets[i], 0): max(min(end, offsets[i + 1]) - offsets[i], 0)] for i, x in enumerate(splits)]
         teacher_to_indices = {}
         for i, key in enumerate(routing_keys):
-            teacher_to_indices.setdefault(key, []).append(i)
+            if splits[i].numel() > 0:
+                teacher_to_indices.setdefault(key, []).append(i)
 
         logits_list = [None] * len(routing_keys)
         streams = {key: torch.cuda.Stream() for key in teacher_to_indices}
@@ -37,7 +44,7 @@ class VanillaKD:
         for s in streams.values():
             torch.cuda.current_stream().wait_stream(s)
 
-        return torch.cat(logits_list, dim=0)
+        return torch.cat([x for x in logits_list if x is not None], dim=0)
 
     @staticmethod
     def _compute_topk_token_overlap_ratios(student_logits, teacher_logits, topks=(4, 16, 64)):
@@ -81,33 +88,62 @@ class VanillaKD:
         student_hiddens = output["hidden_states"][-1][student_loss_mask]
         del output
 
-        if isinstance(self.teacher_lm_head, dict):  # multi-teacher distillation
-            teacher_logits = self.compute_multi_teacher_logits(
-                teacher_hiddens, teacher_loss_mask, micro_batch["teacher_routing_key"]
-            )
+        chunk_size = self.args.train.chunked_loss_size
+        if chunk_size is not None:
+            if isinstance(self.teacher_lm_head, dict):  # multi-teacher distillation
+                teacher_logits_fn = lambda start, end: self.compute_multi_teacher_logits(
+                    teacher_hiddens, teacher_loss_mask, micro_batch["teacher_routing_key"], start, end
+                )
+                kd_loss, metric_sums = chunked_loss(
+                    student_hiddens, self.student.model.lm_head, self.loss_fn,
+                    teacher_logits_fn=teacher_logits_fn, chunk_size=chunk_size, reduction="sum",
+                    metric_fn=self._compute_topk_token_overlap_ratios, return_metrics=True,
+                )
+            else:
+                teacher_hiddens = teacher_hiddens.to(self.teacher_lm_head.weight)
+                kd_loss, metric_sums = chunked_loss(
+                    student_hiddens, self.student.model.lm_head, self.loss_fn,
+                    teacher_hidden=teacher_hiddens, teacher_head=self.teacher_lm_head,
+                    chunk_size=chunk_size, reduction="sum",
+                    metric_fn=self._compute_topk_token_overlap_ratios, return_metrics=True,
+                )
+            kd_loss = kd_loss / avg_token_num
+            loss_info = {"loss": kd_loss, "kd_loss": kd_loss}
+            loss_info.update({key: value / avg_token_num for key, value in metric_sums.items()})
         else:
-            teacher_hiddens = teacher_hiddens.to(self.teacher_lm_head.weight)
-            teacher_logits = self.teacher_lm_head(teacher_hiddens)
-        
-        student_logits = self.student.model.lm_head(student_hiddens)
-        minV = min(teacher_logits.shape[-1], student_logits.shape[-1])
-        teacher_logits = teacher_logits[:, :minV]
-        student_logits = student_logits[:, :minV]
-        if teacher_logits.shape != student_logits.shape:
-            raise ValueError(f"Teacher student shape mismatch. teacher shape: {teacher_logits.shape} vs student shape: {student_logits.shape}, teacher_loss_shape: {teacher_loss_mask.sum()} vs student_loss_shape: {student_loss_mask.sum()}")
-        
-        kd_loss = self.loss_fn(
-            student_logits, 
-            teacher_logits, 
-            reduction="none",
-        )
-        kd_loss = kd_loss.sum() / avg_token_num
-        loss_info = {"loss": kd_loss, "kd_loss": kd_loss}
-        loss_info.update(self._compute_topk_token_overlap_ratios(student_logits, teacher_logits))
+            if isinstance(self.teacher_lm_head, dict):  # multi-teacher distillation
+                teacher_logits = self.compute_multi_teacher_logits(
+                    teacher_hiddens, teacher_loss_mask, micro_batch["teacher_routing_key"]
+                )
+            else:
+                teacher_hiddens = teacher_hiddens.to(self.teacher_lm_head.weight)
+                teacher_logits = self.teacher_lm_head(teacher_hiddens)
+            
+            student_logits = self.student.model.lm_head(student_hiddens)
+            minV = min(teacher_logits.shape[-1], student_logits.shape[-1])
+            teacher_logits = teacher_logits[:, :minV]
+            student_logits = student_logits[:, :minV]
+            if teacher_logits.shape != student_logits.shape:
+                raise ValueError(f"Teacher student shape mismatch. teacher shape: {teacher_logits.shape} vs student shape: {student_logits.shape}, teacher_loss_shape: {teacher_loss_mask.sum()} vs student_loss_shape: {student_loss_mask.sum()}")
+            
+            kd_loss = self.loss_fn(
+                student_logits, 
+                teacher_logits, 
+                reduction="none",
+            )
+            kd_loss = kd_loss.sum() / avg_token_num
+            loss_info = {"loss": kd_loss, "kd_loss": kd_loss}
+            loss_info.update(self._compute_topk_token_overlap_ratios(student_logits, teacher_logits))
 
         if self.args.kd.kd_ratio < 1:
             student_label_ids = student_input_ids.roll(shifts=-1, dims=1)[student_loss_mask]
-            ce_loss = compute_cross_entropy(student_logits, student_label_ids, reduction="sum") / avg_token_num
+            if chunk_size is not None:
+                ce_loss = chunked_loss(
+                    student_hiddens, self.student.model.lm_head, compute_cross_entropy,
+                    label=student_label_ids, chunk_size=chunk_size, reduction="sum"
+                ) / avg_token_num
+            else:
+                ce_loss = compute_cross_entropy(student_logits, student_label_ids, reduction="sum") / avg_token_num
             loss = (1 - self.args.kd.kd_ratio) * ce_loss + self.args.kd.kd_ratio * kd_loss
             loss_info["loss"] = loss
             loss_info["ce_loss"] = ce_loss

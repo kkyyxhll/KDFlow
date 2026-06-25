@@ -456,7 +456,7 @@ class OnPolicyKDTrainer:
         # Build tea_full_text for teacher actor (SGLang engine uses raw text)
         teacher_processor = self._get_teacher_processor(teacher_routing_key)
         tokenizer = getattr(teacher_processor, "tokenizer", teacher_processor)
-        tea_full_text = tea_prompt + response_text + " " + tokenizer.eos_token
+        tea_full_text = tokenizer.decode(tea_tokens["tea_input_ids"].tolist())
 
         sample = {
             **{k: v for k, v in tea_tokens.items() if not k.startswith("_")},

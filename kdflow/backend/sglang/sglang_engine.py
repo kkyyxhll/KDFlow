@@ -1,5 +1,6 @@
 import os
 import queue
+import time
 import torch.multiprocessing as mp
 from torch.multiprocessing import Queue
 from typing import List, Dict, Any, Tuple, Optional
@@ -10,6 +11,10 @@ import torch
 from sglang.srt.entrypoints.engine import Engine as _SglEngine
 from sglang.srt.managers.scheduler import run_scheduler_process as _original_run_scheduler_process
 
+from kdflow.utils.logging_utils import init_logger
+
+logger = init_logger(__name__)
+
 
 os.environ["SGLANG_JIT_DEEPGEMM_FAST_WARMUP"] = "true"
 
@@ -18,7 +23,7 @@ def _patched_run_scheduler_process(*args, **kwargs):
         from kdflow.backend.sglang.monkey_patch import apply_patch
         apply_patch()
     except Exception as e:
-        print(f"[PatchedEngine] WARNING: Failed to apply monkey patch (PID={os.getpid()}): {e}", flush=True)
+        logger.warning(f"[PatchedEngine] WARNING: Failed to apply monkey patch (PID={os.getpid()}): {e}", flush=True)
     return _original_run_scheduler_process(*args, **kwargs)
 
 
@@ -150,16 +155,37 @@ def _handle_generate(engine, request, hidden_queue, response_queue):
         "num_samples": num_samples,
     })
 
-    for output, mask in zip(outputs, kwargs["loss_masks"]):
-        hs_np = output["meta_info"]["hidden_states"][0]
-        hs_np = hs_np[:mask.shape[0]]  # loss_mask may have been truncated
-        hs_np = hs_np[mask]
+    for idx, (output, mask) in enumerate(zip(outputs, kwargs["loss_masks"])):
+        try:
+            hs_np = output["meta_info"]["hidden_states"][0]
 
-        if not hs_np.flags['C_CONTIGUOUS']:
-            hs_np = np.ascontiguousarray(hs_np)
+            # hs_np and mask may differ due to tokenization differences
+            hs_len = hs_np.shape[0]
+            mask_len = mask.shape[0]
+            if hs_len != mask_len:
+                logger.warning(
+                    f"[_handle_generate] sample={idx}/{num_samples} length mismatch: "
+                    f"hs_len={hs_len}, mask_len={mask_len}, diff={mask_len - hs_len}"
+                )
+                min_len = min(hs_len, mask_len)
+                hs_np = hs_np[:min_len]
+                mask = mask[:min_len]
+            hs_np = hs_np[mask]
 
-        hs_tensor = torch.from_numpy(hs_np).share_memory_()
-        hidden_queue.put(hs_tensor)
+            if not hs_np.flags['C_CONTIGUOUS']:
+                hs_np = np.ascontiguousarray(hs_np)
+
+            hs_tensor = torch.from_numpy(hs_np).share_memory_()
+            hidden_queue.put(hs_tensor)
+        except Exception as e:
+            import traceback
+            logger.error(
+                f"[_handle_generate] ERROR at sample={idx}/{num_samples}: {e}\n"
+                f"{traceback.format_exc()}"
+            )
+            # Send sentinel None to notify the main process immediately
+            hidden_queue.put(None)
+            raise
 
 
 def _handle_sleep(engine, request, config, response_queue):
@@ -276,14 +302,23 @@ class SGLangEngineService:
 
         num_samples = response["num_samples"]
         hidden_states = []
+        t_recv_start = time.time()
         for i in range(num_samples):
             try:
                 hs_tensor = self.hidden_queue.get(timeout=300)
+                # Sentinel None means the subprocess encountered an error
+                if hs_tensor is None:
+                    raise RuntimeError(
+                        f"Engine subprocess reported an error while processing "
+                        f"sample={i}/{num_samples}. Check subprocess logs for details."
+                    )
+                hidden_states.append(hs_tensor.numpy())
             except queue.Empty:
+                elapsed_total = time.time() - t_recv_start
                 raise RuntimeError(
-                    f"Hidden state recv timeout while receiving hidden states, sample={i}/{num_samples}"
+                    f"Hidden state recv timeout while receiving hidden states, "
+                    f"sample={i}/{num_samples}, total_elapsed={elapsed_total:.1f}s"
                 )
-            hidden_states.append(hs_tensor.numpy())
 
         return hidden_states
 

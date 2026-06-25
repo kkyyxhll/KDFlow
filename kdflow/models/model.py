@@ -106,12 +106,29 @@ class DistillModel(nn.Module):
             position_ids = attention_mask.long().cumsum(-1) - 1
             position_ids.masked_fill_(attention_mask == 0, 1)
 
-        output = self.model(sequences, attention_mask=foward_attention_mask, position_ids=position_ids, output_hidden_states=True, **kwargs)
-        output = {"hidden_states": [output["hidden_states"][-1]]}
-        
+        if self.args.train.chunked_loss_size is not None:
+            output = self.model(
+                sequences, 
+                attention_mask=foward_attention_mask, 
+                position_ids=position_ids, 
+                **kwargs
+            )
+            # When chunked loss is enabled, lm_head is patched to identity, so output["logits"] actually contains final hidden states.
+            output = {"hidden_states": [output["logits"]]}
+        else:
+            output = self.model(
+                sequences, 
+                attention_mask=foward_attention_mask, 
+                position_ids=position_ids, 
+                output_hidden_states=True, 
+                **kwargs
+            )
+            output = {"hidden_states": [output["hidden_states"][-1]]}
+            
         if allgather_logits and self.packing_samples:
             output["hidden_states"][-1] = gather_and_pad_tensor(
-                output["hidden_states"][-1], ring_attn_group, ring_attn_pad_len, indices, batch, seqlen
+                output["hidden_states"][-1], ring_attn_group, 
+                ring_attn_pad_len, indices, batch, seqlen
             ).squeeze(-2)
         return output
 
