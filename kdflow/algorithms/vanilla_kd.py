@@ -5,6 +5,8 @@ from kdflow.loss import build_loss_fn
 from kdflow.algorithms import register_algorithm
 from kdflow.loss.chunked_loss import chunked_loss
 from kdflow.loss.cross_entropy import compute_cross_entropy
+from kdflow.metrics.topk_token_overlap import compute_topk_token_overlap_ratios
+from kdflow.metrics.entropy import compute_entropy
 
 
 @register_algorithm("vanilla_kd")
@@ -15,6 +17,10 @@ class VanillaKD:
         self.student = student_model
         self.teacher_lm_head = teacher_lm_head
         self.loss_fn = build_loss_fn(self.args.kd.kd_loss_fn, self.args)
+        # certain metrics will be recorded during training
+        self.metric_fns = [compute_topk_token_overlap_ratios]
+        if self.args.scenario == "on_policy_kd":
+            self.metric_fns.append(compute_entropy)
 
     def compute_multi_teacher_logits(self, teacher_hiddens, teacher_loss_mask, routing_keys, start=None, end=None):
         per_sample_counts = teacher_loss_mask.sum(dim=1).tolist()
@@ -45,24 +51,6 @@ class VanillaKD:
             torch.cuda.current_stream().wait_stream(s)
 
         return torch.cat([x for x in logits_list if x is not None], dim=0)
-
-    @staticmethod
-    def _compute_topk_token_overlap_ratios(student_logits, teacher_logits, topks=(4, 16, 64)):
-        overlap_ratios = {}
-        with torch.no_grad():
-            for topk in topks:
-                k = min(topk, student_logits.shape[-1])
-                student_topk = student_logits.topk(k=k, dim=-1).indices
-                teacher_topk = teacher_logits.topk(k=k, dim=-1).indices
-                token_overlap_ratio = (
-                    (student_topk.unsqueeze(-1) == teacher_topk.unsqueeze(-2))
-                    .any(dim=-1)
-                    .float()
-                    .sum(dim=-1)
-                    / k
-                )
-                overlap_ratios[f"top{topk}@token_overlap_ratio"] = token_overlap_ratio.mean()
-        return overlap_ratios
 
     def training_step(self, micro_batch):
         student_input_ids = micro_batch["stu_input_ids"]
@@ -97,7 +85,7 @@ class VanillaKD:
                 kd_loss, metric_sums = chunked_loss(
                     student_hiddens, self.student.model.lm_head, self.loss_fn,
                     teacher_logits_fn=teacher_logits_fn, chunk_size=chunk_size, reduction="sum",
-                    metric_fn=self._compute_topk_token_overlap_ratios, return_metrics=True,
+                    metric_fns=self.metric_fns, return_metrics=True,
                 )
             else:
                 teacher_hiddens = teacher_hiddens.to(self.teacher_lm_head.weight)
@@ -105,7 +93,7 @@ class VanillaKD:
                     student_hiddens, self.student.model.lm_head, self.loss_fn,
                     teacher_hidden=teacher_hiddens, teacher_head=self.teacher_lm_head,
                     chunk_size=chunk_size, reduction="sum",
-                    metric_fn=self._compute_topk_token_overlap_ratios, return_metrics=True,
+                    metric_fns=self.metric_fns, return_metrics=True,
                 )
             kd_loss = kd_loss / avg_token_num
             loss_info = {"loss": kd_loss, "kd_loss": kd_loss}
@@ -131,9 +119,12 @@ class VanillaKD:
                 teacher_logits, 
                 reduction="none",
             )
+            num_tokens = kd_loss.numel()
             kd_loss = kd_loss.sum() / avg_token_num
             loss_info = {"loss": kd_loss, "kd_loss": kd_loss}
-            loss_info.update(self._compute_topk_token_overlap_ratios(student_logits, teacher_logits))
+            for fn in self.metric_fns:
+                for key, value in fn(student_logits=student_logits, teacher_logits=teacher_logits).items():
+                    loss_info[key] = value * num_tokens / avg_token_num
 
         if self.args.kd.kd_ratio < 1:
             student_label_ids = student_input_ids.roll(shifts=-1, dims=1)[student_loss_mask]

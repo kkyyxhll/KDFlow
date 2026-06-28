@@ -4,6 +4,7 @@ from kdflow.loss import build_loss_fn
 from kdflow.algorithms import register_algorithm
 from kdflow.loss.chunked_loss import chunked_loss
 from kdflow.loss.cross_entropy import compute_cross_entropy
+from kdflow.metrics.entropy import compute_entropy
 from kdflow.utils.logging_utils import init_logger
 
 
@@ -31,6 +32,8 @@ class SimpleCrossTokenizerKD:
         self.teacher_tokenizer = teacher_tokenizer
         self.student_overlap_token_ids, self.teacher_overlap_token_ids = self._find_overlap_tokens()
         self.loss_fn = build_loss_fn(self.args.kd.kd_loss_fn, self.args)
+        # certain metrics will be recorded during training
+        self.metric_fns = [compute_entropy] if self.args.scenario == "on_policy_kd" else []
         
     def _find_overlap_tokens(self):
         student_vocab = {k.replace("Ġ", "▁"): v for k, v in self.student_tokenizer.get_vocab().items()}
@@ -138,12 +141,14 @@ class SimpleCrossTokenizerKD:
             def teacher_logits_fn(start, end):
                 return teacher_lm_head(aligned_teacher_hiddens[start:end])[:, teacher_overlap_ids]
 
-            kd_loss = chunked_loss(
+            kd_loss, metric_sums = chunked_loss(
                 aligned_student_hiddens, student_lm_head, self.loss_fn,
                 student_logits_fn=student_logits_fn,
                 teacher_logits_fn=teacher_logits_fn,
                 chunk_size=chunk_size, reduction="sum",
-            ) / avg_token_num
+                metric_fns=self.metric_fns, return_metrics=True,
+            )
+            kd_loss = kd_loss / avg_token_num
         else:
             teacher_logits = self.teacher_lm_head(aligned_teacher_hiddens)
             student_logits = self.student.model.lm_head(aligned_student_hiddens)
@@ -159,6 +164,13 @@ class SimpleCrossTokenizerKD:
             ).sum() / avg_token_num
 
         loss_info = {"loss": kd_loss, "kd_loss": kd_loss, "align_ratio": align_ratio}
+        if chunk_size is not None:
+            loss_info.update({key: value / avg_token_num for key, value in metric_sums.items()})
+        else:
+            num_tokens = aligned_student_logits.shape[0]
+            for fn in self.metric_fns:
+                for key, value in fn(student_logits=aligned_student_logits, teacher_logits=aligned_teacher_logits).items():
+                    loss_info[key] = value * num_tokens / avg_token_num
         
         if self.args.kd.kd_ratio < 1:
             if chunk_size is not None:

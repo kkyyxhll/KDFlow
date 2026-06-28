@@ -1,4 +1,5 @@
-from typing import Any, Callable, Optional
+from collections import defaultdict
+from typing import Any, Callable, List, Optional, Union
 import torch
 
 
@@ -13,7 +14,7 @@ def chunked_loss(
     label: Optional[torch.Tensor] = None,
     chunk_size: int = 2048,
     reduction: str = "none",
-    metric_fn: Optional[Callable[[torch.Tensor, torch.Tensor], dict]] = None,
+    metric_fns: Optional[Union[Callable, List[Callable]]] = None,
     return_metrics: bool = False,
     **kwargs: Any,
 ):
@@ -30,7 +31,7 @@ def chunked_loss(
         raise ValueError("teacher_head must be provided when teacher_hidden is provided.")
 
     losses = []
-    metric_sums = {}
+    metric_sums = defaultdict(lambda: student_hidden.new_zeros(()))
     total_loss = student_hidden.new_zeros(())
     total_tokens = 0
 
@@ -59,9 +60,11 @@ def chunked_loss(
 
         chunk_loss = loss_fn(student_logits, target, reduction="none", **kwargs)
         chunk_tokens = chunk_loss.numel()
-        if metric_fn is not None and has_teacher_logits:
-            for key, value in metric_fn(student_logits, target).items():
-                metric_sums[key] = metric_sums.get(key, student_hidden.new_zeros(())) + value * chunk_tokens
+        if metric_fns is not None and has_teacher_logits:
+            fns = metric_fns if isinstance(metric_fns, list) else [metric_fns]
+            for fn in fns:
+                for key, value in fn(student_logits=student_logits, teacher_logits=target).items():
+                    metric_sums[key] += value * chunk_tokens
         if reduction == "none":
             losses.append(chunk_loss)
         else:

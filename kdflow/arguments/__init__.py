@@ -177,4 +177,5 @@ def init_args(scenario: str = "sft"):
         )
         args.train.enable_sleep = True
 
+    args.scenario = scenario
     return args
