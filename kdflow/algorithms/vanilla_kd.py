@@ -1,5 +1,4 @@
 import torch
-import torch.nn.functional as F
 
 from kdflow.loss import build_loss_fn
 from kdflow.algorithms import register_algorithm
@@ -76,65 +75,36 @@ class VanillaKD:
         student_hiddens = output["hidden_states"][-1][student_loss_mask]
         del output
 
-        chunk_size = self.args.train.chunked_loss_size
-        if chunk_size is not None:
-            if isinstance(self.teacher_lm_head, dict):  # multi-teacher distillation
-                teacher_logits_fn = lambda start, end: self.compute_multi_teacher_logits(
-                    teacher_hiddens, teacher_loss_mask, micro_batch["teacher_routing_key"], start, end
-                )
-                kd_loss, metric_sums = chunked_loss(
-                    student_hiddens, self.student.model.lm_head, self.loss_fn,
-                    teacher_logits_fn=teacher_logits_fn, chunk_size=chunk_size, reduction="sum",
-                    metric_fns=self.metric_fns, return_metrics=True,
-                )
-            else:
-                teacher_hiddens = teacher_hiddens.to(self.teacher_lm_head.weight)
-                kd_loss, metric_sums = chunked_loss(
-                    student_hiddens, self.student.model.lm_head, self.loss_fn,
-                    teacher_hidden=teacher_hiddens, teacher_head=self.teacher_lm_head,
-                    chunk_size=chunk_size, reduction="sum",
-                    metric_fns=self.metric_fns, return_metrics=True,
-                )
-            kd_loss = kd_loss / avg_token_num
-            loss_info = {"loss": kd_loss, "kd_loss": kd_loss}
-            loss_info.update({key: value / avg_token_num for key, value in metric_sums.items()})
-        else:
-            if isinstance(self.teacher_lm_head, dict):  # multi-teacher distillation
-                teacher_logits = self.compute_multi_teacher_logits(
-                    teacher_hiddens, teacher_loss_mask, micro_batch["teacher_routing_key"]
-                )
-            else:
-                teacher_hiddens = teacher_hiddens.to(self.teacher_lm_head.weight)
-                teacher_logits = self.teacher_lm_head(teacher_hiddens)
-            
-            student_logits = self.student.model.lm_head(student_hiddens)
-            minV = min(teacher_logits.shape[-1], student_logits.shape[-1])
-            teacher_logits = teacher_logits[:, :minV]
-            student_logits = student_logits[:, :minV]
-            if teacher_logits.shape != student_logits.shape:
-                raise ValueError(f"Teacher student shape mismatch. teacher shape: {teacher_logits.shape} vs student shape: {student_logits.shape}, teacher_loss_shape: {teacher_loss_mask.sum()} vs student_loss_shape: {student_loss_mask.sum()}")
-            
-            kd_loss = self.loss_fn(
-                student_logits, 
-                teacher_logits, 
-                reduction="none",
+        # Non-chunked case can be regarded as a special case of chunked loss (i.e., chunk_size = seq_len)
+        chunk_size = self.args.train.chunked_loss_size or student_hiddens.shape[0]
+
+        if isinstance(self.teacher_lm_head, dict):  # multi-teacher distillation
+            teacher_logits_fn = lambda start, end: self.compute_multi_teacher_logits(
+                teacher_hiddens, teacher_loss_mask, micro_batch["teacher_routing_key"], start, end
             )
-            num_tokens = kd_loss.numel()
-            kd_loss = kd_loss.sum() / avg_token_num
-            loss_info = {"loss": kd_loss, "kd_loss": kd_loss}
-            for fn in self.metric_fns:
-                for key, value in fn(student_logits=student_logits, teacher_logits=teacher_logits).items():
-                    loss_info[key] = value * num_tokens / avg_token_num
+            kd_loss, metric_sums = chunked_loss(
+                student_hiddens, self.student.model.lm_head, self.loss_fn,
+                teacher_logits_fn=teacher_logits_fn, chunk_size=chunk_size, reduction="sum",
+                metric_fns=self.metric_fns, return_metrics=True,
+            )
+        else:
+            teacher_hiddens = teacher_hiddens.to(self.teacher_lm_head.weight)
+            kd_loss, metric_sums = chunked_loss(
+                student_hiddens, self.student.model.lm_head, self.loss_fn,
+                teacher_hidden=teacher_hiddens, teacher_head=self.teacher_lm_head,
+                chunk_size=chunk_size, reduction="sum",
+                metric_fns=self.metric_fns, return_metrics=True,
+            )
+        kd_loss = kd_loss / avg_token_num
+        loss_info = {"loss": kd_loss, "kd_loss": kd_loss}
+        loss_info.update({key: value / avg_token_num for key, value in metric_sums.items()})
 
         if self.args.kd.kd_ratio < 1:
             student_label_ids = student_input_ids.roll(shifts=-1, dims=1)[student_loss_mask]
-            if chunk_size is not None:
-                ce_loss = chunked_loss(
-                    student_hiddens, self.student.model.lm_head, compute_cross_entropy,
-                    label=student_label_ids, chunk_size=chunk_size, reduction="sum"
-                ) / avg_token_num
-            else:
-                ce_loss = compute_cross_entropy(student_logits, student_label_ids, reduction="sum") / avg_token_num
+            ce_loss = chunked_loss(
+                student_hiddens, self.student.model.lm_head, compute_cross_entropy,
+                label=student_label_ids, chunk_size=chunk_size, reduction="sum"
+            ) / avg_token_num
             loss = (1 - self.args.kd.kd_ratio) * ce_loss + self.args.kd.kd_ratio * kd_loss
             loss_info["loss"] = loss
             loss_info["ce_loss"] = ce_loss

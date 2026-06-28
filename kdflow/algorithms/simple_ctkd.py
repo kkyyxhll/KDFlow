@@ -127,60 +127,37 @@ class SimpleCrossTokenizerKD:
         aligned_student_hiddens = student_hiddens[student_aligned_idx]
         aligned_teacher_hiddens = teacher_hiddens[teacher_aligned_idx]
         
-        chunk_size = self.args.train.chunked_loss_size
-        if chunk_size is not None:
-            # Use chunked_loss for KD loss with sub-vocabulary slicing
-            student_overlap_ids = self.student_overlap_token_ids
-            teacher_overlap_ids = self.teacher_overlap_token_ids
-            student_lm_head = self.student.model.lm_head
-            teacher_lm_head = self.teacher_lm_head
+        # Non-chunked case can be regarded as a special case of chunked loss (i.e., chunk_size = seq_len)
+        chunk_size = self.args.train.chunked_loss_size or aligned_student_hiddens.shape[0]
 
-            def student_logits_fn(hidden_chunk, skip=False):
-                return student_lm_head(hidden_chunk, skip=skip)[:, student_overlap_ids]
+        student_overlap_ids = self.student_overlap_token_ids
+        teacher_overlap_ids = self.teacher_overlap_token_ids
+        student_lm_head = self.student.model.lm_head
+        teacher_lm_head = self.teacher_lm_head
 
-            def teacher_logits_fn(start, end):
-                return teacher_lm_head(aligned_teacher_hiddens[start:end])[:, teacher_overlap_ids]
+        def student_logits_fn(hidden_chunk, skip=False):
+            return student_lm_head(hidden_chunk, skip=skip)[:, student_overlap_ids]
 
-            kd_loss, metric_sums = chunked_loss(
-                aligned_student_hiddens, student_lm_head, self.loss_fn,
-                student_logits_fn=student_logits_fn,
-                teacher_logits_fn=teacher_logits_fn,
-                chunk_size=chunk_size, reduction="sum",
-                metric_fns=self.metric_fns, return_metrics=True,
-            )
-            kd_loss = kd_loss / avg_token_num
-        else:
-            teacher_logits = self.teacher_lm_head(aligned_teacher_hiddens)
-            student_logits = self.student.model.lm_head(aligned_student_hiddens)
-            aligned_student_logits = student_logits[:, self.student_overlap_token_ids]
-            aligned_teacher_logits = teacher_logits[:, self.teacher_overlap_token_ids]
-            assert aligned_teacher_logits.shape == aligned_student_logits.shape, \
-                "teacher_logits must have the same shape with student_logits, " \
-                f"but got teacher: {aligned_teacher_logits.shape} and student: {aligned_student_logits.shape}."
-            kd_loss = self.loss_fn(
-                aligned_student_logits, 
-                aligned_teacher_logits, 
-                reduction="none",
-            ).sum() / avg_token_num
+        def teacher_logits_fn(start, end):
+            return teacher_lm_head(aligned_teacher_hiddens[start:end])[:, teacher_overlap_ids]
+
+        kd_loss, metric_sums = chunked_loss(
+            aligned_student_hiddens, student_lm_head, self.loss_fn,
+            student_logits_fn=student_logits_fn,
+            teacher_logits_fn=teacher_logits_fn,
+            chunk_size=chunk_size, reduction="sum",
+            metric_fns=self.metric_fns, return_metrics=True,
+        )
+        kd_loss = kd_loss / avg_token_num
 
         loss_info = {"loss": kd_loss, "kd_loss": kd_loss, "align_ratio": align_ratio}
-        if chunk_size is not None:
-            loss_info.update({key: value / avg_token_num for key, value in metric_sums.items()})
-        else:
-            num_tokens = aligned_student_logits.shape[0]
-            for fn in self.metric_fns:
-                for key, value in fn(student_logits=aligned_student_logits, teacher_logits=aligned_teacher_logits).items():
-                    loss_info[key] = value * num_tokens / avg_token_num
-        
+        loss_info.update({key: value / avg_token_num for key, value in metric_sums.items()})
+
         if self.args.kd.kd_ratio < 1:
-            if chunk_size is not None:
-                ce_loss = chunked_loss(
-                    student_hiddens, self.student.model.lm_head, compute_cross_entropy,
-                    label=student_label_ids, chunk_size=chunk_size, reduction="sum"
-                ) / avg_token_num
-            else:
-                student_full_logits = self.student.model.lm_head(student_hiddens)
-                ce_loss = compute_cross_entropy(student_full_logits, student_label_ids, reduction="sum") / avg_token_num
+            ce_loss = chunked_loss(
+                student_hiddens, self.student.model.lm_head, compute_cross_entropy,
+                label=student_label_ids, chunk_size=chunk_size, reduction="sum"
+            ) / avg_token_num
             loss = (1 - self.args.kd.kd_ratio) * ce_loss + self.args.kd.kd_ratio * kd_loss
             loss_info["loss"] = loss
             loss_info["ce_loss"] = ce_loss
