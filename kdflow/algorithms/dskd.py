@@ -194,7 +194,7 @@ class DSKD:
         teacher_hiddens = teacher_hiddens.to(self.teacher_lm_head.weight)
         teacher_logits = self.teacher_lm_head(teacher_hiddens)
 
-        student_logits = self.student.model.lm_head(student_hiddens)
+        student_logits = self.student.model.lm_head(student_hiddens, skip=False)
         
         
         if self.vocab_identical:
