@@ -2,6 +2,13 @@
 
 This page mirrors the **News** section of the project README.
 
+## 2026/07 — KDFlow v0.2.0
+
+🎉 KDFlow v0.2.0 has been released. This release brings together recent upgrades
+including **chunked loss**, **multi-teacher distillation**,
+**EMA teacher update** for on-policy self-distillation, **dynamic batch size**, 
+and the recommended Docker image based on **sglang 0.5.12 + CUDA 12.9**.
+
 ## 2026/06 — Multi-teacher distillation
 
 🧑‍🏫 Support **multi-teacher distillation** for both off-policy and on-policy KD.
