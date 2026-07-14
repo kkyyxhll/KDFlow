@@ -10,6 +10,21 @@ from kdflow.utils.logging_utils import init_logger
 logger = init_logger(__name__)
 
 
+def validate_dataset_columns(dataset, **column_settings):
+    """Validate that configured dataset keys exist in the source dataset."""
+    available_columns = list(dataset.column_names)
+    missing_columns = [
+        f"{setting_name}={column_name!r}"
+        for setting_name, column_name in column_settings.items()
+        if column_name not in available_columns
+    ]
+    if missing_columns:
+        raise ValueError(
+            f"Dataset is missing configured dataset column(s): "
+            f"{', '.join(missing_columns)}. Available columns: {available_columns}."
+        )
+
+
 def exist_and_not_none(d, key):
     return key in d and not d[key] is None
 

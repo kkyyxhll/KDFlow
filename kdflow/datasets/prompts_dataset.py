@@ -3,7 +3,11 @@ from typing import Callable, Optional, Dict, Any, List
 from torch.utils.data import Dataset
 from PIL import Image
 
-from kdflow.datasets.utils import convert_to_openai_messages, get_tokenizer_or_processor
+from kdflow.datasets.utils import (
+    convert_to_openai_messages,
+    get_tokenizer_or_processor,
+    validate_dataset_columns,
+)
 from kdflow.models.utils import TokenizerCompareResult
 
 
@@ -48,6 +52,18 @@ class PromptDataset(Dataset):
         self.prompt_max_len = getattr(self.args.data, "prompt_max_len", 0)
 
         self.image_key = getattr(self.args.data, "image_key", None)
+
+        # Validate that all required columns exist in the dataset
+        required_columns = {"input_key": self.input_key}
+        if self.teacher_input_key != self.input_key:
+            required_columns["teacher_input_key"] = self.teacher_input_key
+        if self.label_key:
+            required_columns["label_key"] = self.label_key
+        if self.image_key:
+            required_columns["image_key"] = self.image_key
+        if self.args.kd.multi_teacher_config:
+            required_columns["teacher_routing_key"] = self.args.data.teacher_routing_key
+        validate_dataset_columns(dataset, **required_columns)
 
         # Load processor if multimodal
         self.student_processor = get_tokenizer_or_processor(

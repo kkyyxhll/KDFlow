@@ -4,7 +4,12 @@ import torch
 from torch.utils.data import Dataset
 from PIL import Image
 
-from kdflow.datasets.utils import convert_to_openai_messages, get_tokenizer_or_processor, zero_pad_sequences
+from kdflow.datasets.utils import (
+    convert_to_openai_messages,
+    get_tokenizer_or_processor,
+    validate_dataset_columns,
+    zero_pad_sequences,
+)
 from kdflow.models.utils import TokenizerCompareResult
 
 class SFTDataset(Dataset):
@@ -47,6 +52,22 @@ class SFTDataset(Dataset):
         self.image_key = getattr(self.args.data, "image_key", None)
         self.same_tokenizer = True if tokenizer_info is None else self.tokenizer_info.is_identical
         self.teacher_student_share_input = self.same_tokenizer and (self.teacher_input_key == self.input_key)
+
+        # Validate that all required columns exist in the dataset
+        required_columns = {"input_key": self.input_key}
+        if self.output_key:
+            required_columns["output_key"] = self.output_key
+        if self.image_key:
+            required_columns["image_key"] = self.image_key
+        has_teacher = (
+            self.args.model.teacher_name_or_path is not None
+            or self.args.kd.multi_teacher_config is not None
+        )
+        if has_teacher and self.teacher_input_key != self.input_key:
+            required_columns["teacher_input_key"] = self.teacher_input_key
+        if self.args.kd.multi_teacher_config:
+            required_columns["teacher_routing_key"] = self.args.data.teacher_routing_key
+        validate_dataset_columns(dataset, **required_columns)
         
         self.student_processor = get_tokenizer_or_processor(
             self.args.model.student_name_or_path, 
