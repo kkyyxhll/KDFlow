@@ -113,6 +113,7 @@ class SFTTrainer:
             self.optimizer.zero_grad(set_to_none=True)
             # train a global step
             while True:
+                step_start = time.time()
                 global_batch, global_batch_token_num = [], 0
                 try:
                     for _ in range(self.strategy.accumulated_gradient):
@@ -149,6 +150,8 @@ class SFTTrainer:
                     self.strategy.optimizer_step(self.optimizer, self.student, self.scheduler)
                     
                     status["lr"] = self.scheduler.get_last_lr()[0]
+                    if micro_step + 1 == len(global_batch):
+                        status["step_time"] = time.time() - step_start
                     self.logging(micro_step, status)
                 
                 if self.global_step % self.args.train.save_steps == 0:

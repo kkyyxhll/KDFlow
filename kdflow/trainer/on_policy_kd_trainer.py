@@ -166,6 +166,7 @@ class OnPolicyKDTrainer:
             self.train_dataloader.sampler.set_epoch(epoch)
             
             for prompt_batch in self.train_dataloader:
+                step_start = time.time()
                 self.global_step += 1
                 
                 rollout_start = time.time()
@@ -237,7 +238,8 @@ class OnPolicyKDTrainer:
                     
                 if self.args.train.enable_sleep:
                     self.student.sleep()
-                    
+
+                self.log_state["step_time"].append(time.time() - step_start)
                 self.logging()
                 
                 if self.global_step % self.args.train.save_steps == 0:

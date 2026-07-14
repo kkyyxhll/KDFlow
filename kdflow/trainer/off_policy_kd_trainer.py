@@ -130,6 +130,7 @@ class OffPolicyKDTrainer:
             data_iter = iter(self.train_dataloader)
             is_epoch_finished = False
             while True:
+                step_group_start = time.time()
                 # Collect N global batches for teacher forward
                 all_global_batches = []
                 for _ in range(teacher_forward_n):
@@ -178,14 +179,17 @@ class OffPolicyKDTrainer:
                 # ===== Student Phase (train N steps) =====
                 if self.args.train.enable_sleep:
                     self.student.wakeup()
+                shared_step_time = (time.time() - step_group_start) / len(all_global_batches)
                 for global_batch in all_global_batches:
                     student_start = time.time()
                     self.global_step += 1
                     status_list = ray.get(self.student.async_run_distill(global_batch))
+                    student_step_train_time = time.time() - student_start
                     for k in status_list[0].keys():
                         self.log_state[k].append(sum(s[k] for s in status_list) / len(status_list))
                     self.log_state["teacher_step_fwd_time"].append(teacher_step_fwd_time)
-                    self.log_state["student_step_train_time"].append((time.time() - student_start))
+                    self.log_state["student_step_train_time"].append(student_step_train_time)
+                    self.log_state["step_time"].append(shared_step_time + student_step_train_time)
                     self.logging()
                     
                     if self.global_step % self.args.train.save_steps == 0:
