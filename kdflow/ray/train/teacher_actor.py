@@ -104,8 +104,8 @@ class TeacherRayActor:
         """
         batches = [global_batch[i] for i in batch_indices]
         
-        # Collect prompts and loss masks across all micro-batches
-        prompts = sum((micro_batch["tea_full_texts"] for micro_batch in batches), [])
+        # Collect teacher feed input_ids and loss masks (token ids avoid a re-tokenize round trip).
+        input_ids = sum((micro_batch["tea_feed_input_ids"] for micro_batch in batches), [])
         unpadded_loss_masks = []
         for micro_batch in batches:
             attn_mask, loss_mask = micro_batch["tea_attn_mask"], micro_batch["tea_loss_mask"]
@@ -118,7 +118,7 @@ class TeacherRayActor:
             image_data = sum((micro_batch["images"] for micro_batch in batches), [])
         
         hidden_states_list = self.engine_service.generate(
-            prompt=prompts,
+            input_ids=input_ids,
             loss_masks=unpadded_loss_masks,
             sampling_params={"max_new_tokens": 0},
             return_hidden_states=True,

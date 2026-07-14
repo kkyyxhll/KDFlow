@@ -291,10 +291,12 @@ class OnPolicyKDTrainer:
         rollout_dir = os.path.join(self.args.train.save_path, "rollout_data")
         os.makedirs(rollout_dir, exist_ok=True)
         with open(os.path.join(rollout_dir, f"{self.global_step}.jsonl"), "w") as f:
-            for prompt, output in zip(all_stu_prompts, all_outputs):
+            for prompt, output, label in zip(all_stu_prompts, all_outputs, all_labels):
                 record = {"prompt": prompt, "output": output["text"]}
                 if "reward_result" in output:
                     record["reward_result"] = output["reward_result"]
+                if label is not None and label != "":
+                    record["label"] = label
                 f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
         # Process outputs into rollout samples
@@ -453,15 +455,20 @@ class OnPolicyKDTrainer:
         response_length = len(response_ids)
         total_length = stu_tokens["stu_attn_mask"].float().sum()
         
-        # Build tea_full_text for teacher actor (SGLang engine uses raw text)
+        # Teacher feed input_ids for SGLang. Text: reuse tea_input_ids (exact).
+        # Multimodal: tokenize raw text (single image placeholder) so SGLang re-expands it.
         teacher_processor = self._get_teacher_processor(teacher_routing_key)
         tokenizer = getattr(teacher_processor, "tokenizer", teacher_processor)
-        tea_full_text = tokenizer.decode(tea_tokens["tea_input_ids"].tolist())
+        if images:
+            feed_ids = tokenizer(tea_prompt + response_text, add_special_tokens=False)["input_ids"]
+            tea_feed_input_ids = feed_ids + [tokenizer.eos_token_id]
+        else:
+            tea_feed_input_ids = tea_tokens["tea_input_ids"].tolist()
 
         sample = {
             **{k: v for k, v in tea_tokens.items() if not k.startswith("_")},
             **{k: v for k, v in stu_tokens.items() if not k.startswith("_")},
-            "tea_full_texts": [tea_full_text],
+            "tea_feed_input_ids": [tea_feed_input_ids],
             "rollout_log_probs": None,
             "stu_prompts": [stu_prompt],
             "stu_responses": [response_text],

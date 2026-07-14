@@ -318,9 +318,28 @@ class SFTDataset(Dataset):
                 if "stu_multi_modal_inputs" in batch:
                     batch["tea_multi_modal_inputs"] = batch["stu_multi_modal_inputs"]
 
-            batch["tea_full_texts"] = [
-                item["tea_prompt"] + item["tea_response"] for item in item_list
-            ]
+            # Teacher feed input_ids for SGLang. Text: reuse encoded ids (exact).
+            # Multimodal: tokenize raw text (single image placeholder) so SGLang re-expands it.
+            if not self.teacher_student_share_input:
+                if self.image_key:
+                    tea_feed = []
+                    for i in range(bsz):
+                        if self.args.kd.multi_teacher_config and "teacher_routing_key" in item_list[i]:
+                            proc = self.teacher_processors[item_list[i]["teacher_routing_key"]]
+                        else:
+                            proc = self.teacher_processors.get("default", self.student_processor)
+                        tokenizer = getattr(proc, "tokenizer", proc)
+                        tea_feed.append(tokenizer(tea_full[i])["input_ids"])
+                    batch["tea_feed_input_ids"] = tea_feed
+                else:
+                    batch["tea_feed_input_ids"] = [e["input_ids"].tolist() for e in tea_encs]
+            else:
+                if self.image_key:
+                    batch["tea_feed_input_ids"] = [
+                        self.student_tokenizer(stu_full[i])["input_ids"] for i in range(bsz)
+                    ]
+                else:
+                    batch["tea_feed_input_ids"] = [e["input_ids"].tolist() for e in stu_encs]
 
         if self.image_key:
             batch["images"] = per_sample_images

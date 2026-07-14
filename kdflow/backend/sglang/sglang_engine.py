@@ -139,7 +139,7 @@ def _handle_generate(engine, request, hidden_queue, response_queue):
     kwargs = request["kwargs"]
 
     generate_kwargs = {
-        "prompt": kwargs["prompt"],
+        "input_ids": kwargs["input_ids"],
         "sampling_params": kwargs["sampling_params"],
         "return_hidden_states": kwargs.get("return_hidden_states", True),
     }
@@ -148,6 +148,12 @@ def _handle_generate(engine, request, hidden_queue, response_queue):
 
     outputs = engine.generate(**generate_kwargs)
     num_samples = len(outputs)
+    expected_num_samples = len(kwargs["loss_masks"])
+    if num_samples != expected_num_samples:
+        raise RuntimeError(
+            f"SGLang returned {num_samples} outputs for "
+            f"{expected_num_samples} loss masks"
+        )
 
     response_queue.put({
         "type": "generate",
@@ -159,18 +165,25 @@ def _handle_generate(engine, request, hidden_queue, response_queue):
         try:
             hs_np = output["meta_info"]["hidden_states"][0]
 
-            # hs_np and mask may differ due to tokenization differences
+            # hs_np and mask may differ due to multimodal token expansion.
             hs_len = hs_np.shape[0]
             mask_len = mask.shape[0]
-            if hs_len != mask_len:
+            if hs_len == mask_len:
+                hs_np = hs_np[mask]
+            else:
+                num_loss_tokens = int(mask.sum())
                 logger.warning(
                     f"[_handle_generate] sample={idx}/{num_samples} length mismatch: "
-                    f"hs_len={hs_len}, mask_len={mask_len}, diff={mask_len - hs_len}"
+                    f"hs_len={hs_len}, mask_len={mask_len}, diff={mask_len - hs_len}; "
+                    f"selecting {num_loss_tokens} loss tokens from the tail"
                 )
-                min_len = min(hs_len, mask_len)
-                hs_np = hs_np[:min_len]
-                mask = mask[:min_len]
-            hs_np = hs_np[mask]
+                if num_loss_tokens >= hs_len:
+                    raise ValueError(
+                        f"Cannot select {num_loss_tokens} loss tokens from "
+                        f"hidden states of length {hs_len}"
+                    )
+                # The loss span is a contiguous suffix before the final token.
+                hs_np = hs_np[-num_loss_tokens - 1:-1]
 
             if not hs_np.flags['C_CONTIGUOUS']:
                 hs_np = np.ascontiguousarray(hs_np)
@@ -260,7 +273,7 @@ class SGLangEngineService:
 
     def generate(
         self,
-        prompt: List[str],
+        input_ids: List[List[int]],
         loss_masks: List[np.ndarray],
         sampling_params: Dict[str, Any],
         return_hidden_states: bool = True,
@@ -269,7 +282,8 @@ class SGLangEngineService:
         """Run generation and return hidden states via shared-memory tensors.
         
         Args:
-            prompt: List of raw text prompts. SGLang handles tokenization internally.
+            input_ids: Per-sample token-id lists fed directly to SGLang (avoids a
+                re-tokenization round trip, so hidden-state length matches the mask).
             loss_masks: Pre-computed boolean masks for selecting response hidden states.
             sampling_params: Sampling parameters (e.g. max_new_tokens=0 for prefill-only).
             return_hidden_states: Whether to return hidden states.
@@ -277,6 +291,12 @@ class SGLangEngineService:
         """
         if not self._started:
             raise RuntimeError("Service not started")
+
+        if len(input_ids) != len(loss_masks):
+            raise ValueError(
+                f"input_ids and loss_masks must have the same batch size, got "
+                f"{len(input_ids)} and {len(loss_masks)}"
+            )
 
         # Check if subprocess is still alive before sending request
         if self.process and not self.process.is_alive():
@@ -286,7 +306,7 @@ class SGLangEngineService:
             )
 
         kwargs = {
-            "prompt": prompt,
+            "input_ids": input_ids,
             "loss_masks": loss_masks,
             "sampling_params": sampling_params,
             "return_hidden_states": return_hidden_states,
