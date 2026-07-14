@@ -172,19 +172,9 @@ class OnPolicyKDTrainer:
 
                 self.log_state["timing/rollout"].append(rollout_time)
 
-                teacher_start = time.time()
-                if self.args.train.enable_sleep:
-                    self.teacher.wakeup()
-                    
-                rollout_samples_for_kd = self.teacher.forward(rollout_samples)
-                
-                if self.args.train.enable_sleep:
-                    self.teacher.sleep()
-                self.log_state["timing/teacher_forward"].append(time.time() - teacher_start)
-                
                 all_global_batches = []
                 for i in range(0, len(rollout_samples), num_micro_batches):
-                    global_batch = rollout_samples_for_kd[i : i + num_micro_batches]
+                    global_batch = rollout_samples[i : i + num_micro_batches]
 
                     if self.args.train.use_dynamic_bsz:
                         global_batch = rearrange_global_batch(
@@ -198,6 +188,27 @@ class OnPolicyKDTrainer:
                     for mb in global_batch:
                         mb["avg_micro_batch_token_num"] = avg_micro_batch_token_num
                     all_global_batches.append(global_batch)
+
+                teacher_start = time.time()
+                if self.args.train.enable_sleep:
+                    self.teacher.wakeup()
+
+                teacher_batches = [mb for global_batch in all_global_batches for mb in global_batch]
+                teacher_batches = self.teacher.forward(teacher_batches)
+
+                batch_idx = 0
+                for i, global_batch in enumerate(all_global_batches):
+                    next_batch_idx = batch_idx + len(global_batch)
+                    all_global_batches[i] = teacher_batches[batch_idx:next_batch_idx]
+                    batch_idx = next_batch_idx
+                if batch_idx != len(teacher_batches):
+                    raise RuntimeError(
+                        f"Teacher forward returned {len(teacher_batches)} batches, expected {batch_idx}."
+                    )
+
+                if self.args.train.enable_sleep:
+                    self.teacher.sleep()
+                self.log_state["timing/teacher_forward"].append(time.time() - teacher_start)
                 
                 student_start = time.time()
                 
