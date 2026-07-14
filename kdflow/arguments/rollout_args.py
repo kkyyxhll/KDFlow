@@ -14,6 +14,10 @@ class RolloutArguments:
         default=1,
         metadata={"help": "Tensor parallel size for each rollout engine."}
     )
+    rollout_engine_concurrency: int = field(
+        default=512,
+        metadata={"help": "Maximum concurrent requests per rollout engine."}
+    )
     rollout_enable_sleep: bool = field(
         default=False,
         metadata={"help": "Enable sleep mode for rollout engines."}
@@ -46,5 +50,3 @@ class RolloutArguments:
         default=False,
         metadata={"help": "Whether to print a rollout sample after each rollout."}
     )
-    
-    
