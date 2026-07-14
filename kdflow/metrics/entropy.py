@@ -15,4 +15,4 @@ def compute_entropy(student_logits, **kwargs):
     with torch.no_grad():
         probs = F.softmax(student_logits, dim=-1)
         entropy = torch.logsumexp(student_logits, dim=-1) - torch.sum(probs * student_logits, dim=-1)
-    return {"student/entropy": entropy.mean()}
+    return {"distill/student_entropy": entropy.mean()}

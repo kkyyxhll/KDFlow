@@ -9,6 +9,19 @@ _DIM = "\033[2m"
 _RESET = "\033[0m"
 
 
+def define_wandb_metrics(wandb) -> None:
+    """Configure the shared step metric for all trainer metric namespaces."""
+    wandb.define_metric("train/global_step")
+    for namespace in ("train", "distill", "rollout", "timing"):
+        wandb.define_metric(
+            f"{namespace}/*",
+            step_metric="train/global_step",
+            step_sync=True,
+        )
+    wandb.define_metric("eval/global_step")
+    wandb.define_metric("eval/*", step_metric="eval/global_step", step_sync=True)
+
+
 class ColoredNewLineFormatter(logging.Formatter):
     """Colored formatter that also aligns multi-line messages."""
 

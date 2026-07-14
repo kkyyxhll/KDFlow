@@ -150,7 +150,11 @@ class SimpleCrossTokenizerKD:
         )
         kd_loss = kd_loss / avg_token_num
 
-        loss_info = {"loss": kd_loss, "kd_loss": kd_loss, "align_ratio": align_ratio}
+        loss_info = {
+            "train/loss": kd_loss,
+            "train/kd_loss": kd_loss,
+            "distill/alignment_ratio": align_ratio,
+        }
         loss_info.update({key: value / avg_token_num for key, value in metric_sums.items()})
 
         if self.args.kd.kd_ratio < 1:
@@ -159,7 +163,7 @@ class SimpleCrossTokenizerKD:
                 label=student_label_ids, chunk_size=chunk_size, reduction="sum"
             ) / avg_token_num
             loss = (1 - self.args.kd.kd_ratio) * ce_loss + self.args.kd.kd_ratio * kd_loss
-            loss_info["loss"] = loss
-            loss_info["ce_loss"] = ce_loss
+            loss_info["train/loss"] = loss
+            loss_info["train/ce_loss"] = ce_loss
 
         return loss_info

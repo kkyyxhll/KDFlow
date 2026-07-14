@@ -239,9 +239,9 @@ class DSKD:
             V = student_logits.shape[-1]
             student_label_ids = student_input_ids.roll(shifts=-1, dims=1)[student_loss_mask]
             ce_loss = compute_cross_entropy(student_logits, student_label_ids, reduction="sum") / avg_token_num
-            loss = (1 - self.args.kd.kd_ratio) * ce_loss + self.args.kd.kd_ratio * loss_info["kd_loss"]
-            loss_info["loss"] = loss
-            loss_info["ce_loss"] = ce_loss
+            loss = (1 - self.args.kd.kd_ratio) * ce_loss + self.args.kd.kd_ratio * loss_info["train/kd_loss"]
+            loss_info["train/loss"] = loss
+            loss_info["train/ce_loss"] = ce_loss
 
         return loss_info
     
@@ -299,15 +299,15 @@ class DSKD:
         kd_loss = t2s_kd_loss + t2s_ce_loss + s2t_kd_loss
         
         loss_info = {
-            "loss": kd_loss,
-            "kd_loss": kd_loss,
-            "t2s_ce_loss": t2s_ce_loss,
-            "t2s_kd_loss": t2s_kd_loss,
-            "t2s_agreement": t2s_agreement,
-            "s2t_kd_loss": s2t_kd_loss,
-            "s2t_agreement": s2t_agreement,
-            "t_acc": t_acc,
-            "t2s_acc": t2s_acc
+            "train/loss": kd_loss,
+            "train/kd_loss": kd_loss,
+            "train/t2s_ce_loss": t2s_ce_loss,
+            "train/t2s_kd_loss": t2s_kd_loss,
+            "distill/t2s_agreement": t2s_agreement,
+            "train/s2t_kd_loss": s2t_kd_loss,
+            "distill/s2t_agreement": s2t_agreement,
+            "distill/teacher_accuracy": t_acc,
+            "distill/t2s_accuracy": t2s_acc
         }
         
         return loss_info
@@ -388,12 +388,12 @@ class DSKD:
         
         kd_loss = t2s_kd_loss + t2s_ce_loss + s2t_kd_loss
         loss_info = {
-            "loss": kd_loss,
-            "kd_loss": kd_loss,
-            "t2s_ce_loss": t2s_ce_loss,
-            "t2s_kd_loss": t2s_kd_loss,
-            "s2t_kd_loss": s2t_kd_loss,
-            "t2s_acc": t2s_acc
+            "train/loss": kd_loss,
+            "train/kd_loss": kd_loss,
+            "train/t2s_ce_loss": t2s_ce_loss,
+            "train/t2s_kd_loss": t2s_kd_loss,
+            "train/s2t_kd_loss": s2t_kd_loss,
+            "distill/t2s_accuracy": t2s_acc
         }
         
         return loss_info
@@ -482,15 +482,15 @@ class DSKD:
         kd_loss = t2s_kd_loss + t2s_ce_loss + s2t_kd_loss
 
         loss_info = {
-            "loss": kd_loss,
-            "kd_loss": kd_loss,
-            "t2s_ce_loss": t2s_ce_loss,
-            "t2s_kd_loss": t2s_kd_loss,
-            "t2s_agreement": t2s_agreement,
-            "t2s_acc": t2s_acc,
-            "s2t_kd_loss": s2t_kd_loss,
-            "s2t_agreement": s2t_agreement,
-            "align_ratio": torch.tensor(align_ratio, device=device),
+            "train/loss": kd_loss,
+            "train/kd_loss": kd_loss,
+            "train/t2s_ce_loss": t2s_ce_loss,
+            "train/t2s_kd_loss": t2s_kd_loss,
+            "distill/t2s_agreement": t2s_agreement,
+            "distill/t2s_accuracy": t2s_acc,
+            "train/s2t_kd_loss": s2t_kd_loss,
+            "distill/s2t_agreement": s2t_agreement,
+            "distill/alignment_ratio": torch.tensor(align_ratio, device=device),
         }
 
         return loss_info

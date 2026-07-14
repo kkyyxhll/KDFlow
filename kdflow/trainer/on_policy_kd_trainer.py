@@ -11,7 +11,7 @@ import torch
 import torch.distributed as dist
 
 from kdflow.datasets.utils import get_tokenizer_or_processor
-from kdflow.utils.logging_utils import init_logger
+from kdflow.utils.logging_utils import define_wandb_metrics, init_logger
 from kdflow.utils.utils import zero_pad_sequences
 from kdflow.utils.dynamic_bsz import rearrange_global_batch
 
@@ -109,10 +109,7 @@ class OnPolicyKDTrainer:
                 dir=self.args.log.wandb_dir,
             )
             
-            wandb.define_metric("train/global_step")
-            wandb.define_metric("train/*", step_metric="train/global_step", step_sync=True)
-            wandb.define_metric("eval/global_step")
-            wandb.define_metric("eval/*", step_metric="eval/global_step", step_sync=True)
+            define_wandb_metrics(wandb)
     
     def _print_training_config(self) -> None:
         """Log training configuration before training starts."""
@@ -173,7 +170,7 @@ class OnPolicyKDTrainer:
                 rollout_samples = self.rollout(prompt_batch, **self.generate_kwargs)
                 rollout_time = time.time() - rollout_start
 
-                self.log_state["rollout_time"].append(rollout_time)
+                self.log_state["timing/rollout"].append(rollout_time)
 
                 teacher_start = time.time()
                 if self.args.train.enable_sleep:
@@ -183,7 +180,7 @@ class OnPolicyKDTrainer:
                 
                 if self.args.train.enable_sleep:
                     self.teacher.sleep()
-                self.log_state["teacher_fwd_time"].append(time.time() - teacher_start)
+                self.log_state["timing/teacher_forward"].append(time.time() - teacher_start)
                 
                 all_global_batches = []
                 for i in range(0, len(rollout_samples), num_micro_batches):
@@ -212,7 +209,7 @@ class OnPolicyKDTrainer:
                     for k in status_list[0].keys():
                         self.log_state[k].append(sum(s[k] for s in status_list) / len(status_list))
                         
-                self.log_state["student_train_time"].append(time.time() - student_start)
+                self.log_state["timing/student_train"].append(time.time() - student_start)
                 
                 ray.get([actor.empty_cache.remote() for actor in self.student._actor_handlers])
 
@@ -221,7 +218,7 @@ class OnPolicyKDTrainer:
                     self.rollout_group.wakeup(tags=["weights"])
                 update_start = time.time()
                 self.student.update_rollout_weights()
-                self.log_state["weight_update_time"].append(time.time() - update_start)
+                self.log_state["timing/rollout_weight_sync"].append(time.time() - update_start)
                 if self.args.train.enable_sleep:
                     self.rollout_group.sleep(tags=["weights"])
                 
@@ -232,14 +229,14 @@ class OnPolicyKDTrainer:
                         self.teacher.wakeup(tags=["weights"])
                     teacher_update_start = time.time()
                     self.student.update_teacher_weights()
-                    self.log_state["teacher_update_time"].append(time.time() - teacher_update_start)
+                    self.log_state["timing/teacher_weight_sync"].append(time.time() - teacher_update_start)
                     if self.args.train.enable_sleep:
                         self.teacher.sleep(tags=["weights"])
                     
                 if self.args.train.enable_sleep:
                     self.student.sleep()
 
-                self.log_state["step_time"].append(time.time() - step_start)
+                self.log_state["timing/step_time"].append(time.time() - step_start)
                 self.logging()
                 
                 if self.global_step % self.args.train.save_steps == 0:
@@ -314,6 +311,25 @@ class OnPolicyKDTrainer:
             )
             for i in range(len(all_outputs))
         ]
+
+        # Compute rollout-level length statistics before samples are split into
+        # micro-batches. The scalar fields are only needed for logging, so remove
+        # them before sending samples through the teacher/student pipeline.
+        length_names = ("prompt_length", "response_length", "total_length")
+        length_values = {
+            name: [sample.pop(name).item() for sample in sample_list]
+            for name in length_names
+        }
+        for name, values in length_values.items():
+            self.log_state[f"rollout/{name}_mean"].append(sum(values) / len(values))
+            self.log_state[f"rollout/{name}_max"].append(max(values))
+
+        max_response_length = self.generate_kwargs["max_new_tokens"]
+        response_lengths = length_values["response_length"]
+        response_clip_ratio = sum(
+            length >= max_response_length for length in response_lengths
+        ) / len(response_lengths)
+        self.log_state["rollout/response_clip_ratio"].append(response_clip_ratio)
         
         # Print sample for debugging
         sample0 = sample_list[0]["stu_prompts"][0] + sample_list[0]["stu_responses"][0]
@@ -394,6 +410,7 @@ class OnPolicyKDTrainer:
             f"{prefix}_input_ids": input_ids,
             f"{prefix}_attn_mask": attn_mask,
             f"{prefix}_loss_mask": loss_mask,
+            f"_{prefix}_prompt_length": prompt_len,
         }
         multi_modal_inputs = {
             k: torch.as_tensor(v) for k, v in full_tok.items()
@@ -454,8 +471,9 @@ class OnPolicyKDTrainer:
                 "tea_loss_mask": stu_tokens["stu_loss_mask"].clone(),
             }
         
+        prompt_length = stu_tokens["_stu_prompt_length"]
         response_length = len(response_ids)
-        total_length = stu_tokens["stu_attn_mask"].float().sum()
+        total_length = stu_tokens["stu_attn_mask"].sum().item()
         
         # Teacher feed input_ids for SGLang. Text: reuse tea_input_ids (exact).
         # Multimodal: tokenize raw text (single image placeholder) so SGLang re-expands it.
@@ -476,6 +494,7 @@ class OnPolicyKDTrainer:
             "stu_responses": [response_text],
             "tea_prompts": [tea_prompt],
             "labels": [label],
+            "prompt_length": torch.FloatTensor([[prompt_length]]),
             "response_length": torch.FloatTensor([[response_length]]),
             "total_length": torch.FloatTensor([[total_length]]),
         }
@@ -507,15 +526,18 @@ class OnPolicyKDTrainer:
             )
             for k in self.log_state:
                 if isinstance(self.log_state[k], list) and len(self.log_state[k]) > 0:
-                    self.log_state[k] = sum(self.log_state[k]) / len(self.log_state[k])
+                    values = self.log_state[k]
+                    self.log_state[k] = (
+                        max(values) if k.endswith("_max") else sum(values) / len(values)
+                    )
             log_info = []
             for k in self.log_state:
-                # Skip keys that have no values logged in this interval (e.g. teacher_update_time
+                # Skip keys that have no values logged in this interval (e.g. teacher weight sync
                 # is only logged every teacher_update_freq steps).
                 if isinstance(self.log_state[k], list):
                     continue
-                if k == "lr":
-                    log_info.append(f"lr: {self.log_state[k]:.6e}")
+                if k == "train/lr":
+                    log_info.append(f"{k}: {self.log_state[k]:.6e}")
                 else:
                     log_info.append(f"{k}: {self.log_state[k]:.6f}")
             # Append average phase times
@@ -528,7 +550,7 @@ class OnPolicyKDTrainer:
                 for k in self.log_state:
                     if isinstance(self.log_state[k], list):
                         continue
-                    logs[f"train/{k}"] = self.log_state[k]
+                    logs[k] = self.log_state[k]
                 self._wandb.log(logs)
 
             for k in self.log_state:

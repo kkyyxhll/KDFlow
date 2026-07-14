@@ -10,7 +10,7 @@ import torch
 import torch.distributed as dist
 from tqdm import tqdm
 
-from kdflow.utils.logging_utils import init_logger
+from kdflow.utils.logging_utils import define_wandb_metrics, init_logger
 from kdflow.utils.dynamic_bsz import rearrange_global_batch
 
 
@@ -80,10 +80,7 @@ class OffPolicyKDTrainer:
                 dir=self.args.log.wandb_dir,
             )
             
-            wandb.define_metric("train/global_step")
-            wandb.define_metric("train/*", step_metric="train/global_step", step_sync=True)
-            wandb.define_metric("eval/global_step")
-            wandb.define_metric("eval/*", step_metric="eval/global_step", step_sync=True)
+            define_wandb_metrics(wandb)
         
     def _print_training_config(self) -> None:
         """Log training configuration before training starts."""
@@ -187,9 +184,9 @@ class OffPolicyKDTrainer:
                     student_step_train_time = time.time() - student_start
                     for k in status_list[0].keys():
                         self.log_state[k].append(sum(s[k] for s in status_list) / len(status_list))
-                    self.log_state["teacher_step_fwd_time"].append(teacher_step_fwd_time)
-                    self.log_state["student_step_train_time"].append(student_step_train_time)
-                    self.log_state["step_time"].append(shared_step_time + student_step_train_time)
+                    self.log_state["timing/teacher_forward_time"].append(teacher_step_fwd_time)
+                    self.log_state["timing/student_train"].append(student_step_train_time)
+                    self.log_state["timing/step_time"].append(shared_step_time + student_step_train_time)
                     self.logging()
                     
                     if self.global_step % self.args.train.save_steps == 0:
@@ -233,8 +230,8 @@ class OffPolicyKDTrainer:
                     
             log_info = []
             for k in self.log_state:
-                if k == "lr":
-                    log_info.append(f"lr: {self.log_state[k]:.6e}")
+                if k == "train/lr":
+                    log_info.append(f"{k}: {self.log_state[k]:.6e}")
                 else:
                     log_info.append(f"{k}: {self.log_state[k]:.6f}")
             log_str = ", ".join(log_info)
@@ -244,7 +241,7 @@ class OffPolicyKDTrainer:
             if self._wandb is not None:
                 logs = {"train/global_step": self.global_step}
                 for k in self.log_state:
-                    logs[f"train/{k}"] = self.log_state[k]
+                    logs[k] = self.log_state[k]
                 self._wandb.log(logs)
             
             for k in self.log_state:

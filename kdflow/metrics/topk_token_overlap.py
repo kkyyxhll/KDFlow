@@ -16,5 +16,6 @@ def compute_topk_token_overlap_ratios(student_logits, teacher_logits, topks=(4, 
                 .sum(dim=-1)
                 / k
             )
-            overlap_ratios[f"token_overlap_ratio/top{topk}"] = token_overlap_ratio.mean()
+            key = f"distill/teacher_student_token_overlap/top{topk}"
+            overlap_ratios[key] = token_overlap_ratio.mean()
     return overlap_ratios

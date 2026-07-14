@@ -310,7 +310,7 @@ class StudentRayActor:
             for key in loss_info:
                 status[key].append(loss_info[key].item())
             
-            loss = loss_info["loss"]
+            loss = loss_info["train/loss"]
             self.strategy.backward(loss, self.student, self.optim)
             
             if hasattr(self.kd_algorithm, 'get_projector_params'):
@@ -318,7 +318,7 @@ class StudentRayActor:
                 if projector_params:
                     torch.nn.utils.clip_grad_norm_(projector_params, max_norm=self.args.train.max_norm)
 
-            status["grad_norm"].append(
+            status["train/grad_norm"].append(
                 torch.nn.utils.clip_grad_norm_(
                     self.student.parameters(), max_norm=float("inf")
                 ).item()
@@ -330,9 +330,9 @@ class StudentRayActor:
                 self.ema_update()
 
             if "response_length" in micro_batch:
-                status["response_length"].append(micro_batch["response_length"].mean().item())
+                status["rollout/response_length"].append(micro_batch["response_length"].mean().item())
             if "total_length" in micro_batch:
-                status["total_length"].append(micro_batch["total_length"].mean().item())
+                status["rollout/total_length"].append(micro_batch["total_length"].mean().item())
             
             del micro_batch
 
@@ -340,7 +340,7 @@ class StudentRayActor:
             if isinstance(status[key], list) and len(status[key]) > 0:
                 status[key] = sum(status[key]) / len(status[key])
 
-        status["lr"] = self.scheduler.get_last_lr()[0]
+        status["train/lr"] = self.scheduler.get_last_lr()[0]
 
         for key in status:
             status[key] = self.strategy.all_reduce(status[key], op="mean")

@@ -10,7 +10,7 @@ from typing import Optional
 from collections import defaultdict
 
 from kdflow.algorithms.sft import SFT
-from kdflow.utils.logging_utils import init_logger
+from kdflow.utils.logging_utils import define_wandb_metrics, init_logger
 from kdflow.utils.dynamic_bsz import rearrange_global_batch
 
 
@@ -67,10 +67,7 @@ class SFTTrainer:
                 dir=self.args.log.wandb_dir,
             )
 
-            wandb.define_metric("train/global_step")
-            wandb.define_metric("train/*", step_metric="train/global_step", step_sync=True)
-            wandb.define_metric("eval/global_step")
-            wandb.define_metric("eval/*", step_metric="eval/global_step", step_sync=True)
+            define_wandb_metrics(wandb)
     
     def _print_training_config(self) -> None:
         """Log training configuration before training starts."""
@@ -143,15 +140,15 @@ class SFTTrainer:
                     micro_batch["avg_micro_batch_token_num"] = avg_micro_batch_token_num
                     
                     status = self.kd_algorithm.training_step(micro_batch)
-                    loss = status["loss"]
+                    loss = status["train/loss"]
                     self.strategy.backward(loss, self.student, self.optimizer)
-                    status["grad_norm"] = torch.nn.utils.clip_grad_norm_(
+                    status["train/grad_norm"] = torch.nn.utils.clip_grad_norm_(
                         self.student.parameters(), max_norm=float("inf")).item()
                     self.strategy.optimizer_step(self.optimizer, self.student, self.scheduler)
                     
-                    status["lr"] = self.scheduler.get_last_lr()[0]
+                    status["train/lr"] = self.scheduler.get_last_lr()[0]
                     if micro_step + 1 == len(global_batch):
-                        status["step_time"] = time.time() - step_start
+                        status["timing/step_time"] = time.time() - step_start
                     self.logging(micro_step, status)
                 
                 if self.global_step % self.args.train.save_steps == 0:
@@ -198,8 +195,8 @@ class SFTTrainer:
             if dist.get_rank() == 0:
                 log_info = []
                 for k in self.log_state:
-                    if k == "lr":
-                        log_info.append(f"lr: {self.log_state[k]:.6e}")
+                    if k == "train/lr":
+                        log_info.append(f"{k}: {self.log_state[k]:.6e}")
                     else:
                         log_info.append(f"{k}: {self.log_state[k]:.6f}")
                 log_str = ", ".join(log_info)
@@ -209,7 +206,7 @@ class SFTTrainer:
                 if self._wandb is not None:
                     logs = {"train/global_step": self.global_step}
                     for k in self.log_state:
-                        logs[f"train/{k}"] = self.log_state[k]
+                        logs[k] = self.log_state[k]
                     self._wandb.log(logs)
 
             for k in self.log_state:

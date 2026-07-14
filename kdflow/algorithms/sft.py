@@ -42,7 +42,7 @@ class SFT:
 
         loss_info = {}
         loss = ce_loss
-        loss_info["loss"] = loss
-        loss_info["ce_loss"] = ce_loss
+        loss_info["train/loss"] = loss
+        loss_info["train/ce_loss"] = ce_loss
 
         return loss_info
