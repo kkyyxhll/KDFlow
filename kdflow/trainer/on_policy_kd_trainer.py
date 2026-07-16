@@ -127,6 +127,8 @@ class OnPolicyKDTrainer:
         log_config("Num GPUs:", self.world_size)
         log_config("Num Data:", num_data)
         log_config("Num Epochs:", self.epochs)
+        log_config("Rollout Batch Size:", self.args.rollout.rollout_batch_size)
+        log_config("Train Batch Size:", self.args.train.train_batch_size)
         log_config("Rollout Iterations Per Epoch:", self.num_rollout_iters_per_epoch)
         log_config("Total Rollout Iterations:", self.max_rollout_iters)
         log_config("Num Updates Per Rollout:", num_update_per_rollout)

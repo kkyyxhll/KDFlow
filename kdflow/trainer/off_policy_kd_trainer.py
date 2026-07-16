@@ -96,6 +96,7 @@ class OffPolicyKDTrainer:
         log_config("Num GPUs:", self.world_size)
         log_config("Num Data:", num_data)
         log_config("Num Epochs:", self.epochs)
+        log_config("Train Batch Size:", self.args.train.train_batch_size)
         log_config("Steps Per Epoch:", self.num_update_steps_per_epoch)
         log_config("Total Training Steps:", total_steps)
         if self.args.train.use_dynamic_bsz:
