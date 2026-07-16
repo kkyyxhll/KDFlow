@@ -61,13 +61,20 @@ def train(args):
         )
         eval_data = eval_data.select(range(min(args.data.max_samples, len(eval_data))))
         eval_dataset = SFTDataset(
-            eval_data, 
-            student.tokenizer, 
-            args.data.max_len,
-            strategy, 
-            input_template=args.data.input_template
+            eval_data,
+            strategy,
+            max_data_num=args.data.max_samples,
+            input_template=args.data.input_template,
+            num_processors=args.data.preprocess_num_workers,
         )
-        eval_dataloader = strategy.setup_dataloader(eval_dataset, 1, True, False, collate_fn=eval_dataset.collate_fn)
+        eval_dataloader = strategy.setup_dataloader(
+            eval_dataset,
+            batch_size=1,
+            pin_memory=True,
+            shuffle=False,
+            drop_last=False,
+            collate_fn=eval_dataset.collate_fn,
+        )
     else:
         eval_dataloader = None
 
