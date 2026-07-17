@@ -10,7 +10,11 @@ from typing import Optional
 from collections import defaultdict
 
 from kdflow.algorithms.sft import SFT
-from kdflow.utils.logging_utils import define_wandb_metrics, init_logger
+from kdflow.utils.logging_utils import (
+    define_wandb_metrics,
+    init_logger,
+    log_eval_metrics,
+)
 from kdflow.utils.dynamic_bsz import rearrange_global_batch
 
 
@@ -102,6 +106,10 @@ class SFTTrainer:
         self._print_training_config()
         
         self.start_time = time.time()
+        if self.eval_dataloader is not None and self.args.train.eval_steps > 0 and self.global_step == 0:
+            self.strategy.log(f"Start evaluating at global step {self.global_step}")
+            self.evaluate()
+
         for epoch in range(start_epoch, self.epochs):
             self.current_epoch = epoch
             self.train_dataloader.sampler.set_epoch(epoch)
@@ -151,6 +159,13 @@ class SFTTrainer:
                     if micro_step + 1 == len(global_batch):
                         status["timing/step_time"] = time.time() - step_start
                     self.logging(micro_step, status)
+
+                if (
+                    self.eval_dataloader is not None
+                    and self.global_step % self.args.train.eval_steps == 0
+                ):
+                    self.strategy.log(f"Start evaluating at global step {self.global_step}")
+                    self.evaluate()
                 
                 if self.global_step % self.args.train.save_steps == 0:
                     self.strategy.log(f"Saving model at global step {self.global_step}")
@@ -166,6 +181,43 @@ class SFTTrainer:
 
         if self._wandb is not None and dist.get_rank() == 0:
             self._wandb.finish()
+
+    @torch.no_grad()
+    def evaluate(self):
+        """Evaluate SFT loss on the validation set."""
+        was_training = self.student.training
+        self.student.eval()
+        metric_sums = defaultdict(float)
+        num_tokens = 0.0
+
+        try:
+            for micro_batch in self.eval_dataloader:
+                micro_batch = {
+                    key: value.to(torch.cuda.current_device())
+                    if isinstance(value, torch.Tensor) else value
+                    for key, value in micro_batch.items()
+                }
+                batch_tokens = micro_batch["stu_loss_mask"].sum().to(torch.cuda.current_device())
+                dist.all_reduce(batch_tokens, op=dist.ReduceOp.SUM)
+                micro_batch["avg_micro_batch_token_num"] = batch_tokens / dist.get_world_size()
+
+                metrics = self.strategy.all_reduce(
+                    self.kd_algorithm.training_step(micro_batch), op="mean"
+                )
+                weight = batch_tokens.item()
+                for key, value in metrics.items():
+                    value = value.item() if hasattr(value, "item") else float(value)
+                    metric_sums[key] += value * weight
+                num_tokens += weight
+        finally:
+            if was_training:
+                self.student.train()
+
+        if num_tokens == 0:
+            return {}
+        metrics = {key: value / num_tokens for key, value in metric_sums.items()}
+        metrics["eval/num_tokens"] = num_tokens / self.args.model.ring_attn_size
+        return log_eval_metrics(self.strategy, self._wandb, metrics, self.global_step)
             
     def logging(self, step, current_log_state):
         for key in current_log_state:

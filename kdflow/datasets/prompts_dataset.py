@@ -83,7 +83,7 @@ class PromptDataset(Dataset):
             )
 
         # Truncate dataset if max_data_num is specified
-        if max_data_num > 0 and max_data_num < len(dataset):
+        if max_data_num is not None and max_data_num > 0 and max_data_num < len(dataset):
             strategy.log(f"Truncating dataset from {len(dataset)} to {max_data_num}")
             dataset = dataset.select(range(max_data_num))
 

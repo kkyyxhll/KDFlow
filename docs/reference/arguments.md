@@ -141,6 +141,7 @@ Defined in `kdflow/arguments/data_args.py`.
 | `--train_split`               | `train`      | Train split name                                                           |
 | `--eval_dataset_path`         | `None`       | Evaluation dataset path                                                    |
 | `--eval_split`                | `eval`       | Eval split name                                                            |
+| `--custom_eval_fn`            | `None`       | Python file defining `eval_fn(predictions, labels)`                        |
 | `--input_key`                 | `messages`   | Dataset input key                                                          |
 | `--output_key`                | `None`       | Dataset output key                                                         |
 | `--image_key`                 | `None`       | Image key for multimodal datasets                                          |

@@ -11,7 +11,12 @@ import torch
 import torch.distributed as dist
 
 from kdflow.datasets.utils import get_tokenizer_or_processor
-from kdflow.utils.logging_utils import define_wandb_metrics, init_logger
+from kdflow.utils.logging_utils import (
+    define_wandb_metrics,
+    init_logger,
+    log_eval_metrics,
+    normalize_eval_metrics,
+)
 from kdflow.utils.utils import zero_pad_sequences
 from kdflow.utils.dynamic_bsz import rearrange_global_batch
 
@@ -35,6 +40,7 @@ class OnPolicyKDTrainer:
         max_rollout_iters: int = None,
         num_rollout_iters_per_epoch: int = None,
         generate_kwargs: Dict[str, float] = None,
+        custom_eval_fn: Optional[Callable] = None,
     ) -> None:
         """
         Initialize the trainer.
@@ -61,6 +67,7 @@ class OnPolicyKDTrainer:
         self.max_rollout_iters = max_rollout_iters
         self.num_rollout_iters_per_epoch = num_rollout_iters_per_epoch
         self.generate_kwargs = generate_kwargs
+        self.custom_eval_fn = custom_eval_fn
         self.epochs = self.args.train.num_epochs
         
         self.image_key = getattr(self.args.data, "image_key", None)
@@ -86,6 +93,7 @@ class OnPolicyKDTrainer:
         assert self.args.kd.kd_ratio == 1.0, "On-policy KD only supports kd_ratio=1.0."
         
         self.log_state = defaultdict(list)
+        self.eval_rollout_metrics = {}
         self._init_loggers()
     
     def _init_loggers(self) -> None:
@@ -159,6 +167,10 @@ class OnPolicyKDTrainer:
         
         self.start_time = time.time()
         num_micro_batches = self.args.train.train_batch_size // self.args.train.micro_train_batch_size
+
+        if self.eval_dataloader is not None and self.args.train.eval_steps > 0 and self.global_step == 0:
+            self.strategy.log(f"Evaluating model at global step {self.global_step}")
+            self.evaluate()
         
         for epoch in range(start_epoch, self.epochs):
             self.current_epoch = epoch
@@ -169,33 +181,18 @@ class OnPolicyKDTrainer:
                 self.global_step += 1
                 
                 rollout_start = time.time()
-                rollout_samples = self.rollout(prompt_batch, **self.generate_kwargs)
+                rollout_samples = self.rollout(prompt_batch, mode="train", **self.generate_kwargs)
                 rollout_time = time.time() - rollout_start
 
                 self.log_state["timing/rollout"].append(rollout_time)
 
-                all_global_batches = []
-                for i in range(0, len(rollout_samples), num_micro_batches):
-                    global_batch = rollout_samples[i : i + num_micro_batches]
-
-                    if self.args.train.use_dynamic_bsz:
-                        global_batch = rearrange_global_batch(
-                            global_batch,
-                            max_token_len=self.args.train.max_token_len_per_gpu,
-                            dp_size=self.dp_size,
-                        )
-
-                    global_batch_token_num = sum(mb["stu_loss_mask"].sum() for mb in global_batch)
-                    avg_micro_batch_token_num = global_batch_token_num / len(global_batch)
-                    for mb in global_batch:
-                        mb["avg_micro_batch_token_num"] = avg_micro_batch_token_num
-                    all_global_batches.append(global_batch)
+                all_global_batches = self._prepare_global_batches(rollout_samples, num_micro_batches)
 
                 teacher_start = time.time()
                 if self.args.train.enable_sleep:
                     self.teacher.wakeup()
 
-                teacher_batches = [mb for global_batch in all_global_batches for mb in global_batch]
+                teacher_batches = sum(all_global_batches, [])
                 teacher_batches = self.teacher.forward(teacher_batches)
 
                 batch_idx = 0
@@ -251,6 +248,13 @@ class OnPolicyKDTrainer:
 
                 self.log_state["timing/step_time"].append(time.time() - step_start)
                 self.logging()
+
+                if (
+                    self.eval_dataloader is not None
+                    and self.global_step % self.args.train.eval_steps == 0
+                ):
+                    self.strategy.log(f"Evaluating model at global step {self.global_step}")
+                    self.evaluate()
                 
                 if self.global_step % self.args.train.save_steps == 0:
                     self.strategy.log(f"Saving model at global step {self.global_step}")
@@ -267,17 +271,84 @@ class OnPolicyKDTrainer:
 
         if self._wandb is not None:
             self._wandb.finish()
+
+    def _prepare_global_batches(self, rollout_samples, num_micro_batches):
+        all_global_batches = []
+        for i in range(0, len(rollout_samples), num_micro_batches):
+            global_batch = rollout_samples[i : i + num_micro_batches]
+            if self.args.train.use_dynamic_bsz:
+                global_batch = rearrange_global_batch(
+                    global_batch,
+                    max_token_len=self.args.train.max_token_len_per_gpu,
+                    dp_size=self.dp_size,
+                )
+
+            batch_tokens = sum(mb["stu_loss_mask"].sum() for mb in global_batch)
+            avg_micro_batch_token_num = batch_tokens / len(global_batch)
+            for micro_batch in global_batch:
+                micro_batch["avg_micro_batch_token_num"] = avg_micro_batch_token_num
+            all_global_batches.append(global_batch)
+        return all_global_batches
+
+    def evaluate(self):
+        """Evaluate on validation set."""
+        eval_prompts = sum(self.eval_dataloader, [])
+        if not eval_prompts:
+            return {}
+
+        generate_kwargs = {**self.generate_kwargs, "temperature": 0.0}
+        rollout_samples = self.rollout(eval_prompts, mode="eval", **generate_kwargs)
+        predictions = sum((micro_batch["stu_responses"] for micro_batch in rollout_samples), [])
+        labels = sum((micro_batch["labels"] for micro_batch in rollout_samples), [])
+
+        eval_batches = rollout_samples
+        if self.args.train.use_dynamic_bsz:
+            eval_batches = rearrange_global_batch(
+                eval_batches,
+                max_token_len=self.args.train.max_token_len_per_gpu,
+                dp_size=self.dp_size,
+            )
+
+        if self.args.train.enable_sleep:
+            self.teacher.wakeup()
+        eval_batches = self.teacher.forward(eval_batches)
+        if self.args.train.enable_sleep:
+            self.teacher.sleep()
+
+        if self.args.train.enable_sleep:
+            self.student.wakeup()
+        metrics = ray.get(self.student.async_run_eval(eval_batches))[0]
+        if self.args.train.enable_sleep:
+            self.student.sleep()
+        metrics.update(self.eval_rollout_metrics)
+
+        if self.custom_eval_fn is not None:
+            custom_metrics = self.custom_eval_fn(predictions, labels)
+            if not isinstance(custom_metrics, dict):
+                raise TypeError("custom_eval_fn must return a dict")
+            metrics.update(normalize_eval_metrics(custom_metrics))
+
+        return log_eval_metrics(self.strategy, self._wandb, metrics, self.global_step)
             
-    def rollout(self, prompt_batch: List[Dict[str, str]], **kwargs) -> List[dict]:
+    def rollout(
+        self,
+        prompt_batch: List[Dict[str, str]],
+        mode: str = "train",
+        **kwargs,
+    ) -> List[dict]:
         """Generate samples using rollout engine.
 
         Args:
             prompt_batch: List of dicts with keys: datasource, stu_prompt, tea_prompt, label
+            mode: Rollout mode, either "train" or "eval".
             **kwargs: Additional arguments for generation
 
         Returns:
             List of rollout sample dicts containing generated samples
         """
+        if mode not in ("train", "eval"):
+            raise ValueError(f"Unsupported rollout mode: {mode!r}")
+
         if self.args.train.enable_sleep:
             self.rollout_group.wakeup()
 
@@ -289,7 +360,7 @@ class OnPolicyKDTrainer:
         all_teacher_routing_keys = [item.get("teacher_routing_key") for item in prompt_batch] if self.args.kd.multi_teacher_config else None
         
         # Expand prompt list based on the number of samples per prompt
-        n_samples_per_prompt = self.args.rollout.n_samples_per_prompt
+        n_samples_per_prompt = self.args.rollout.n_samples_per_prompt if mode == "train" else 1
         all_stu_prompts = sum([[p] * n_samples_per_prompt for p in all_stu_prompts], [])
         all_tea_prompts = sum([[p] * n_samples_per_prompt for p in all_tea_prompts], [])
         all_labels = sum([[label] * n_samples_per_prompt for label in all_labels], [])
@@ -298,18 +369,24 @@ class OnPolicyKDTrainer:
         if all_teacher_routing_keys:
             all_teacher_routing_keys = sum([[key] * n_samples_per_prompt for key in all_teacher_routing_keys], [])
         
-        all_outputs = self.rollout_group.generate(all_stu_prompts, self.generate_kwargs, image_data=all_images)
+        sampling_params = kwargs or self.generate_kwargs
+        all_outputs = self.rollout_group.generate(
+            all_stu_prompts, sampling_params, image_data=all_images
+        )
 
         rollout_dir = os.path.join(self.args.train.save_path, "rollout_data")
+        if mode == "eval":
+            rollout_dir = os.path.join(rollout_dir, "val")
         os.makedirs(rollout_dir, exist_ok=True)
-        with open(os.path.join(rollout_dir, f"{self.global_step}.jsonl"), "w") as f:
+        rollout_path = os.path.join(rollout_dir, f"{self.global_step}.jsonl")
+        with open(rollout_path, "w") as f:
             for prompt, output, label in zip(all_stu_prompts, all_outputs, all_labels):
-                record = {"prompt": prompt, "output": output["text"]}
+                rollout_record = {"prompt": prompt, "output": output["text"]}
                 if "reward_result" in output:
-                    record["reward_result"] = output["reward_result"]
+                    rollout_record["reward_result"] = output["reward_result"]
                 if label is not None and label != "":
-                    record["label"] = label
-                f.write(json.dumps(record, ensure_ascii=False) + "\n")
+                    rollout_record["label"] = label
+                f.write(json.dumps(rollout_record, ensure_ascii=False) + "\n")
 
         # Process outputs into rollout samples
         sample_list = [
@@ -333,20 +410,26 @@ class OnPolicyKDTrainer:
             name: [sample.pop(name).item() for sample in sample_list]
             for name in length_names
         }
+        metric_prefix = "rollout" if mode == "train" else "eval"
+        rollout_metrics = {}
         for name, values in length_values.items():
-            self.log_state[f"rollout/{name}_mean"].append(sum(values) / len(values))
-            self.log_state[f"rollout/{name}_max"].append(max(values))
-
-        max_response_length = self.generate_kwargs["max_new_tokens"]
+            rollout_metrics[f"{metric_prefix}/{name}/mean"] = sum(values) / len(values)
+            rollout_metrics[f"{metric_prefix}/{name}/max"] = max(values)
+        max_response_length = sampling_params["max_new_tokens"]
         response_lengths = length_values["response_length"]
-        response_clip_ratio = sum(
+        rollout_metrics[f"{metric_prefix}/response_clip_ratio"] = sum(
             length >= max_response_length for length in response_lengths
         ) / len(response_lengths)
-        self.log_state["rollout/response_clip_ratio"].append(response_clip_ratio)
+
+        if mode == "train":
+            for name, value in rollout_metrics.items():
+                self.log_state[name].append(value)
+        else:
+            self.eval_rollout_metrics = rollout_metrics
         
         # Print sample for debugging
         sample0 = sample_list[0]["stu_prompts"][0] + sample_list[0]["stu_responses"][0]
-        if self.args.rollout.print_rollout_sample:
+        if mode == "train" and self.args.rollout.print_rollout_sample:
             print(sample0)
         
         micro_batch_list = self._collate_micro_batches(sample_list, self.args.train.micro_train_batch_size)
@@ -541,7 +624,7 @@ class OnPolicyKDTrainer:
                 if isinstance(self.log_state[k], list) and len(self.log_state[k]) > 0:
                     values = self.log_state[k]
                     self.log_state[k] = (
-                        max(values) if k.endswith("_max") else sum(values) / len(values)
+                        max(values) if k.endswith("/max") else sum(values) / len(values)
                     )
             log_info = []
             for k in self.log_state:

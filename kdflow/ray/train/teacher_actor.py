@@ -102,6 +102,9 @@ class TeacherRayActor:
         Returns:
             List of (batch_idx, micro-batch with teacher_hiddens) tuples and return timestamp
         """
+        if not batch_indices:
+            return []
+
         batches = [global_batch[i] for i in batch_indices]
         
         # Collect teacher feed input_ids and loss masks (token ids avoid a re-tokenize round trip).

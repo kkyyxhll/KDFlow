@@ -261,6 +261,22 @@ class RolloutActorGroup:
                     image_data=image_data,
                 )
             )
+        except Exception:
+            try:
+                engine_health = self.health_check()
+            except Exception as health_error:
+                engine_health = f"unavailable ({health_error!r})"
+            logger.exception(
+                "Rollout generation failed: prompts=%d, max_concurrent=%d, "
+                "router_url=%s, router_alive=%s, router_exitcode=%s, engine_health=%s",
+                len(prompts),
+                max_concurrent,
+                generate_url,
+                self.router_process.is_alive(),
+                self.router_process.exitcode,
+                engine_health,
+            )
+            raise
         finally:
             loop.close()
 
@@ -389,11 +405,28 @@ class RolloutActorGroup:
                     payload["image_data"] = [RolloutActorGroup._encode_image_to_base64(im) for im in img]
                 else:
                     payload["image_data"] = RolloutActorGroup._encode_image_to_base64(img)
-            async with semaphore:
-                async with session.post(router_url, json=payload) as resp:
-                    resp.raise_for_status()
-                    output = await resp.json()
-                    results[idx] = output
+            max_retries = 2
+            for attempt in range(max_retries + 1):
+                try:
+                    async with semaphore:
+                        async with session.post(router_url, json=payload) as resp:
+                            resp.raise_for_status()
+                            output = await resp.json()
+                            results[idx] = output
+                    return
+                except (aiohttp.ClientConnectionError, asyncio.TimeoutError) as error:
+                    if attempt == max_retries:
+                        raise RuntimeError(
+                            f"Rollout request {idx} failed after {max_retries + 1} attempts "
+                            f"(prompt_chars={len(prompt)}, sampling_params={sampling_params})"
+                        ) from error
+                    delay = 2 ** attempt
+                    await asyncio.sleep(delay)
+                except Exception as error:
+                    raise RuntimeError(
+                        f"Rollout request {idx} failed "
+                        f"(prompt_chars={len(prompt)}, sampling_params={sampling_params})"
+                    ) from error
 
         connector = aiohttp.TCPConnector(limit=max_concurrent)
         timeout = aiohttp.ClientTimeout(total=None, sock_read=None, sock_connect=60)

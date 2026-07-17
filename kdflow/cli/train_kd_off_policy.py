@@ -129,7 +129,12 @@ def train(args):
             num_processors=args.data.preprocess_num_workers,
         )
         eval_dataloader = strategy.setup_dataloader(
-            eval_dataset, 1, True, False, collate_fn=eval_dataset.collate_fn
+            eval_dataset,
+            batch_size=1,
+            pin_memory=True,
+            shuffle=False,
+            drop_last=False,
+            collate_fn=eval_dataset.collate_fn,
         )
     
     # Calculate max training steps

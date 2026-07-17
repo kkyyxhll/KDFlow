@@ -10,7 +10,7 @@ import torch
 import torch.distributed as dist
 from tqdm import tqdm
 
-from kdflow.utils.logging_utils import define_wandb_metrics, init_logger
+from kdflow.utils.logging_utils import define_wandb_metrics, init_logger, log_eval_metrics
 from kdflow.utils.dynamic_bsz import rearrange_global_batch
 
 
@@ -58,6 +58,16 @@ class OffPolicyKDTrainer:
         
         self.log_state = defaultdict(list)
         self._init_loggers()
+
+        if self.eval_dataloader and self.args.train.eval_steps > 0:
+            assert (
+                self.args.train.eval_steps >= self.args.kd.teacher_forward_n_batches
+                and self.args.train.eval_steps % self.args.kd.teacher_forward_n_batches == 0
+            ), (
+                "`eval_steps` must be a multiple of `teacher_forward_n_batches` "
+                f"and no smaller than it, but got eval_steps={self.args.eval_steps}, "
+                f"teacher_forward_n_batches={self.args.kd.teacher_forward_n_batches}."
+            )
     
     def _init_loggers(self) -> None:
         """Initialize wandb loggers."""
@@ -120,6 +130,10 @@ class OffPolicyKDTrainer:
         num_micro_batches = self.args.train.train_batch_size // self.args.train.micro_train_batch_size
         self.teacher_forward_n = min(self.args.kd.teacher_forward_n_batches, len(self.train_dataloader))
         teacher_forward_n = self.teacher_forward_n
+
+        if self.eval_dataloader is not None and self.args.train.eval_steps > 0 and self.global_step == 0:
+            self.strategy.log(f"Start evaluating at global step {self.global_step}")
+            self.evaluate()
         
         for epoch in range(start_epoch, self.epochs):
             self.current_epoch = epoch
@@ -197,6 +211,13 @@ class OffPolicyKDTrainer:
                 
                 if self.args.train.enable_sleep:
                     self.student.sleep()
+
+                if (
+                    self.eval_dataloader is not None
+                    and self.global_step % self.args.train.eval_steps == 0
+                ):
+                    self.strategy.log(f"Start evaluating at global step {self.global_step}")
+                    self.evaluate()
                 
             self.strategy.log(f"Saving model after epoch {epoch + 1}")
             save_path = os.path.join(self.args.train.save_path, f"epoch_{epoch + 1}")
@@ -207,6 +228,32 @@ class OffPolicyKDTrainer:
 
         if self._wandb is not None:
             self._wandb.finish()
+
+    def evaluate(self):
+        """Evaluate KD loss and distillation metrics without updating the student."""
+        eval_batches = list(self.eval_dataloader)
+        if not eval_batches:
+            return {}
+        if self.args.train.use_dynamic_bsz:
+            eval_batches = rearrange_global_batch(
+                eval_batches,
+                max_token_len=self.args.train.max_token_len_per_gpu,
+                dp_size=self.dp_size,
+            )
+
+        if self.args.train.enable_sleep:
+            self.teacher.wakeup()
+        eval_batches = self.teacher.forward(eval_batches)
+        if self.args.train.enable_sleep:
+            self.teacher.sleep()
+
+        if self.args.train.enable_sleep:
+            self.student.wakeup()
+        metrics = ray.get(self.student.async_run_eval(eval_batches))[0]
+        if self.args.train.enable_sleep:
+            self.student.sleep()
+
+        return log_eval_metrics(self.strategy, self._wandb, metrics, self.global_step)
             
     def logging(self):
         if self.global_step % self.args.log.logging_steps == 0:

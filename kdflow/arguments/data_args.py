@@ -5,7 +5,7 @@ from typing import Optional
 @dataclass
 class DataArguments:
     """ Arguments for dataset."""
-    
+
     train_dataset_path: str = field(
         default=None,
         metadata={"help": "Training dataset name or path."}
@@ -25,6 +25,13 @@ class DataArguments:
     eval_split: str = field(
         default="eval",
         metadata={"help": "Eval split in dataset."}
+    )
+    custom_eval_fn: str = field(
+        default=None,
+        metadata={
+            "help": "Optional Python file defining eval_fn(predictions, labels), "
+                    "which must return a metric dict (only supported in on-policy KD)."
+        }
     )
     input_key: str = field(
         default="messages",
@@ -75,4 +82,3 @@ class DataArguments:
     preprocess_num_workers: int = field(
         default=8,
     )
-    

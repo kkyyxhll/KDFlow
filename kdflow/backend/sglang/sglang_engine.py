@@ -332,7 +332,9 @@ class SGLangEngineService:
                         f"Engine subprocess reported an error while processing "
                         f"sample={i}/{num_samples}. Check subprocess logs for details."
                     )
-                hidden_states.append(hs_tensor.numpy())
+                hs_np = hs_tensor.numpy().copy()
+                del hs_tensor
+                hidden_states.append(hs_np)
             except queue.Empty:
                 elapsed_total = time.time() - t_recv_start
                 raise RuntimeError(

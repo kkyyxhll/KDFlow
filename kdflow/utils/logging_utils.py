@@ -22,6 +22,28 @@ def define_wandb_metrics(wandb) -> None:
     wandb.define_metric("eval/*", step_metric="eval/global_step", step_sync=True)
 
 
+def normalize_eval_metrics(metrics):
+    """Convert trainer metric names and scalar values to the eval namespace."""
+    normalized = {}
+    for key, value in metrics.items():
+        key = key if key.startswith("eval/") else f"eval/{key.split('/', 1)[-1]}"
+        normalized[key] = value.item() if hasattr(value, "item") else float(value)
+    return normalized
+
+
+def log_eval_metrics(strategy, wandb, metrics, global_step):
+    """Log evaluation metrics to the console and wandb."""
+    metrics = normalize_eval_metrics(metrics)
+    if not metrics:
+        return metrics
+
+    values = ", ".join(f"{key}: {value:.6f}" for key, value in sorted(metrics.items()))
+    strategy.log(f"Evaluation at global step {global_step}, {values}")
+    if wandb is not None:
+        wandb.log({"eval/global_step": global_step, **metrics})
+    return metrics
+
+
 class ColoredNewLineFormatter(logging.Formatter):
     """Colored formatter that also aligns multi-line messages."""
 

@@ -71,10 +71,6 @@ class TrainingArguments:
     gradient_checkpointing_use_reentrant: bool = field(
         default=False
     )
-    teacher_offload: bool = field(
-        default=False,
-        metadata={"help": "Offload teacher model to GPU."}
-    )
     train_enable_sleep: bool = field(
         default=False,
         metadata={"help": "[Deprecated] Use --enable_sleep instead."}
@@ -143,8 +139,8 @@ class TrainingArguments:
         else:
              raise TypeError(f"Expected str for adam_betas, but get {type(self.adam_betas)}")
          
-        if self.save_steps == -1:
+        if self.save_steps <= 0:
             self.save_steps = float("inf")
         
-        if self.eval_steps == -1:
+        if self.eval_steps <= 0:
             self.eval_steps = float("inf")

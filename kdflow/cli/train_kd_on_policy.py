@@ -15,7 +15,7 @@ from kdflow.models.utils import check_tokenizer_identical, TokenizerCompareResul
 from kdflow.backend import get_strategy
 from kdflow.arguments import init_args
 from kdflow.utils.distributed_sampler import DistributedSampler
-from kdflow.utils.utils import get_tokenizer
+from kdflow.utils.utils import get_tokenizer, load_custom_eval_fn
 
 
 def train(args):
@@ -139,9 +139,15 @@ def train(args):
             strategy,
             tokenizer_info=tokenizer_info,
             input_template=args.data.input_template,
+            num_processors=args.data.preprocess_num_workers,
         )
         eval_dataloader = strategy.setup_dataloader(
-            eval_dataset, 1, True, False, collate_fn=eval_dataset.collate_fn
+            eval_dataset,
+            batch_size=args.rollout.rollout_batch_size,
+            pin_memory=True,
+            shuffle=False,
+            drop_last=False,
+            collate_fn=eval_dataset.collate_fn,
         )
     
     # Calculate max training steps
@@ -175,6 +181,7 @@ def train(args):
         max_rollout_iters=max_rollout_iters,
         num_rollout_iters_per_epoch=num_rollout_iters_per_epoch,
         generate_kwargs=generate_kwargs,
+        custom_eval_fn=load_custom_eval_fn(args.data.custom_eval_fn) if args.data.custom_eval_fn else None,
     )
     
     try:

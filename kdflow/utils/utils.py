@@ -1,3 +1,4 @@
+import runpy
 from typing import List
 
 import torch
@@ -7,6 +8,16 @@ from transformers import AutoTokenizer
 from kdflow.utils.logging_utils import init_logger
 
 logger = init_logger(__name__)
+
+
+def load_custom_eval_fn(path):
+    """Load the required eval_fn from a custom Python file."""
+    eval_fn = runpy.run_path(path).get("eval_fn")
+    if not callable(eval_fn):
+        raise ValueError(
+            f"{path!r} must define a callable eval_fn(predictions, labels)"
+        )
+    return eval_fn
 
 
 def get_tokenizer(model_name_or_path, model=None, padding_side="left", use_fast=True):

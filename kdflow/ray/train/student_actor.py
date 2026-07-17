@@ -21,7 +21,7 @@ from safetensors.torch import load_file
 
 from kdflow.models import DistillModel
 from kdflow.utils.distributed_util import stateless_init_process_group, torch_dist_barrier_and_cuda_sync
-from kdflow.utils.logging_utils import init_logger
+from kdflow.utils.logging_utils import init_logger, normalize_eval_metrics
 from kdflow.ray.utils import ray_noset_visible_devices
 from kdflow.algorithms import ALGO_DICT
 from kdflow.utils.multimodal_utils import extract_multi_modal_inputs
@@ -265,6 +265,32 @@ class StudentRayActor:
         logger.info(f"Loaded lm_head ({weight_key}), shape: {lm_head.weight.shape}")
         return lm_head
         
+    def _prepare_micro_batch(self, batch):
+        device = torch.cuda.current_device()
+        micro_batch = {
+            k: torch.from_numpy(ray.get(v) if isinstance(v, ray.ObjectRef) else v).to(device, non_blocking=True)
+                if isinstance(v, (np.ndarray, ray.ObjectRef))
+            else v.to(device) if isinstance(v, torch.Tensor)
+            else v
+            for k, v in batch.items()
+        }
+
+        if "stu_multi_modal_inputs" in micro_batch:
+            mm_kwargs = extract_multi_modal_inputs(micro_batch["stu_multi_modal_inputs"])
+            mm_kwargs = {
+                k: v.to(device, non_blocking=True) if isinstance(v, torch.Tensor) else v
+                for k, v in mm_kwargs.items()
+            }
+            if mm_kwargs:
+                input_ids = micro_batch["stu_input_ids"]
+                mm_token_type_ids = torch.zeros_like(input_ids)
+                mm_token_type_ids[input_ids == self.image_token_id] = 1
+                mm_token_type_ids[input_ids == self.video_token_id] = 2
+                mm_kwargs["mm_token_type_ids"] = mm_token_type_ids
+            micro_batch["stu_multi_modal_inputs"] = mm_kwargs
+
+        return micro_batch
+
     def fit(self, train_data):
         """
         Train student model with the given data.
@@ -276,7 +302,6 @@ class StudentRayActor:
             Training status dict
         """
         self.student.train()
-        device = torch.cuda.current_device()
         status = defaultdict(list)
 
         if self.args.train.use_dynamic_bsz:
@@ -284,27 +309,7 @@ class StudentRayActor:
             self.strategy.step = 0
 
         for batch in train_data:
-            micro_batch = {
-                k: torch.from_numpy(ray.get(v) if isinstance(v, ray.ObjectRef) else v).to(device, non_blocking=True)
-                    if isinstance(v, (np.ndarray, ray.ObjectRef))
-                else v.to(device) if isinstance(v, torch.Tensor)
-                else v
-                for k, v in batch.items()
-            }
-
-            if "stu_multi_modal_inputs" in micro_batch:
-                mm_kwargs = extract_multi_modal_inputs(micro_batch["stu_multi_modal_inputs"])
-                mm_kwargs = {
-                    k: v.to(device, non_blocking=True) if isinstance(v, torch.Tensor) else v
-                    for k, v in mm_kwargs.items()
-                }
-                if mm_kwargs:
-                    input_ids = micro_batch["stu_input_ids"]
-                    mm_token_type_ids = torch.zeros_like(input_ids)
-                    mm_token_type_ids[input_ids == self.image_token_id] = 1
-                    mm_token_type_ids[input_ids == self.video_token_id] = 2
-                    mm_kwargs["mm_token_type_ids"] = mm_token_type_ids
-                micro_batch["stu_multi_modal_inputs"] = mm_kwargs
+            micro_batch = self._prepare_micro_batch(batch)
 
             loss_info = self.kd_algorithm.training_step(micro_batch)
             for key in loss_info:
@@ -348,6 +353,38 @@ class StudentRayActor:
         # self.empty_cache()
         
         return status
+
+    @torch.no_grad()
+    def evaluate(self, eval_data):
+        """Evaluate the current student without updating model states."""
+        was_training = self.student.training
+        self.student.eval()
+        metric_sums = defaultdict(float)
+        num_tokens = 0.0
+
+        try:
+            for batch in eval_data:
+                micro_batch = self._prepare_micro_batch(batch)
+                weight = micro_batch.pop("_eval_weight", 1.0)
+                batch_tokens = micro_batch["stu_loss_mask"].sum().item()
+                micro_batch["avg_micro_batch_token_num"] = max(batch_tokens, 1)
+
+                metrics = self.kd_algorithm.training_step(micro_batch)
+                for key, value in metrics.items():
+                    value = value.item() if hasattr(value, "item") else float(value)
+                    metric_sums[key] += value * batch_tokens * weight
+                num_tokens += batch_tokens * weight
+        finally:
+            if was_training:
+                self.student.train()
+
+        num_tokens = self.strategy.all_reduce(num_tokens, op="sum")
+        metrics = {
+            key: self.strategy.all_reduce(value, op="sum") / max(num_tokens, 1)
+            for key, value in metric_sums.items()
+        }
+        metrics["eval/num_tokens"] = num_tokens / self.args.model.ring_attn_size
+        return normalize_eval_metrics(metrics)
 
     def save_model(self, save_path=None):
         """Save model checkpoint after fitting on only rank0."""

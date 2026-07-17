@@ -67,6 +67,12 @@ def init_args(scenario: str = "sft"):
     )
     
     # Validate arguments
+    if scenario != "on_policy_kd" and args.data.custom_eval_fn is not None:
+        logger.warning(
+            f"`--custom_eval_fn` is only supported in the `on_policy_kd` scenario "
+            f"and will be ignored for `{scenario}`."
+        )
+
     if args.data.input_template and "{}" not in args.data.input_template:
         logger.warning("{} not in args.data.input_template, set to None")
         args.data.input_template = None

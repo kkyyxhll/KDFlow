@@ -134,12 +134,27 @@ class StudentActorGroup:
     
     def async_run_distill(self, data):
         """ Send data to each distill worker and run distillation.
-        
+
         Args: 
             data (list): global batch data
         Returns:
             List[ray.ObjectRef]: List of remote object references to the results
         """
+        return self._run_all_actors(data, "fit")
+
+    def async_run_eval(self, data):
+        """Send evaluation data to every student worker."""
+        data = list(data)
+        if data:
+            effective_actors = len(self._actor_handlers) // self.duplicate_actors
+            padding_size = (-len(data)) % effective_actors
+            data.extend({**data[-1], "_eval_weight": 0.0} for _ in range(padding_size))
+        return self._run_all_actors(data, "evaluate")
+
+    def _run_all_actors(self, data, actor_method):
+        if not data:
+            return []
+
         total_length = len(data)
         num_actors = len(self._actor_handlers)
         effective_actors = num_actors // self.duplicate_actors
@@ -157,7 +172,7 @@ class StudentActorGroup:
             for j in range(self.duplicate_actors):
                 actor_idx = chunk_idx * self.duplicate_actors + j
                 actor = self._actor_handlers[actor_idx]
-                refs.append(actor.fit.remote(chunk_ref))
+                refs.append(getattr(actor, actor_method).remote(chunk_ref))
         return refs
     
     def sleep(self):
@@ -222,4 +237,3 @@ class StudentActorGroup:
             for actor in self._actor_handlers
         ]
         ray.get(refs)
-        

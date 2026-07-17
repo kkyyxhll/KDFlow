@@ -2,7 +2,7 @@ import os
 from typing import List, Dict, Any
 
 import torch
-from datasets import interleave_datasets, load_dataset, load_from_disk
+from datasets import DatasetDict, interleave_datasets, load_dataset, load_from_disk
 from transformers import AutoProcessor, AutoTokenizer
 
 from kdflow.utils.logging_utils import init_logger
@@ -48,6 +48,7 @@ def blending_datasets(
         seed (int): Random seed
         max_count (int): Maximum number of samples per dataset
     """
+    dataset_split = dataset_split or "train"
     datasets = datasets.split(",")
     if probabilities is not None:
         probabilities = list(map(float, probabilities.split(",")))
@@ -74,7 +75,7 @@ def blending_datasets(
             ext = ext.lower().strip(".")
             if ext == "jsonl":
                 ext = "json"
-            data = load_dataset(ext, data_files=dataset)
+            data = load_dataset(ext, data_files={dataset_split: dataset})
             logger.info(f"loaded {dataset} with data_files={dataset}")
         # local dataset saved with `datasets.Dataset.save_to_disk`
         elif os.path.isdir(dataset):
@@ -89,7 +90,12 @@ def blending_datasets(
             logger.info(f"loaded {dataset} from files")
 
         # Select dataset
-        if dataset_split and dataset_split in data:
+        if isinstance(data, DatasetDict):
+            if dataset_split not in data:
+                raise ValueError(
+                    f"Dataset {dataset!r} does not contain split {dataset_split!r}. "
+                    f"Available splits: {list(data)}."
+                )
             data = data[dataset_split]
         data = data.select(range(min(max_count, len(data))))
         data_list.append(data)
