@@ -124,6 +124,7 @@ For routing rollouts to multiple domain-specific teachers, see
 
 ## See also
 
+- [Evaluation](evaluation.md) — configure validation rollouts and custom metrics.
 - [Off-Policy KD](off_policy_kd.md)
 - [Multi-Teacher KD](multi_teacher_kd.md)
 - [Cross-Tokenizer KD](cross_tokenizer_kd.md) — on-policy variants are also

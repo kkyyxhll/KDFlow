@@ -55,6 +55,7 @@ distillation/rollout-specific knobs:
 
 ## See also
 
+- [Evaluation](evaluation.md) — configure validation loss during SFT.
 - [Off-Policy KD](off_policy_kd.md) — once you have an SFT checkpoint, plug it
   in as the student.
 - [Architecture](../concepts/architecture.md) — how the trainers and actor

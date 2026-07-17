@@ -59,13 +59,13 @@ class OffPolicyKDTrainer:
         self.log_state = defaultdict(list)
         self._init_loggers()
 
-        if self.eval_dataloader and self.args.train.eval_steps > 0:
+        if self.eval_dataloader and self.args.train.eval_steps < float("inf"):
             assert (
                 self.args.train.eval_steps >= self.args.kd.teacher_forward_n_batches
                 and self.args.train.eval_steps % self.args.kd.teacher_forward_n_batches == 0
             ), (
                 "`eval_steps` must be a multiple of `teacher_forward_n_batches` "
-                f"and no smaller than it, but got eval_steps={self.args.eval_steps}, "
+                f"and no smaller than it, but got eval_steps={self.args.train.eval_steps}, "
                 f"teacher_forward_n_batches={self.args.kd.teacher_forward_n_batches}."
             )
     
@@ -131,7 +131,7 @@ class OffPolicyKDTrainer:
         self.teacher_forward_n = min(self.args.kd.teacher_forward_n_batches, len(self.train_dataloader))
         teacher_forward_n = self.teacher_forward_n
 
-        if self.eval_dataloader is not None and self.args.train.eval_steps > 0 and self.global_step == 0:
+        if self.eval_dataloader is not None and self.args.train.eval_steps < float("inf") and self.global_step == 0:
             self.strategy.log(f"Start evaluating at global step {self.global_step}")
             self.evaluate()
         

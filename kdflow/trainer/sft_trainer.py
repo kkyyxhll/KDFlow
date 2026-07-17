@@ -106,7 +106,7 @@ class SFTTrainer:
         self._print_training_config()
         
         self.start_time = time.time()
-        if self.eval_dataloader is not None and self.args.train.eval_steps > 0 and self.global_step == 0:
+        if self.eval_dataloader is not None and self.args.train.eval_steps < float("inf") and self.global_step == 0:
             self.strategy.log(f"Start evaluating at global step {self.global_step}")
             self.evaluate()
 

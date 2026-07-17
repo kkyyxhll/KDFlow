@@ -10,3 +10,5 @@ dist/
 build/
 eggs/
 *.whl
+
+site/

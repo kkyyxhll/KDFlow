@@ -118,6 +118,7 @@ For routing samples to multiple domain-specific teachers, see
 
 ## See also
 
+- [Evaluation](evaluation.md) — evaluate KD and distillation metrics during training.
 - [On-Policy KD](on_policy_kd.md) — same recipe but with student rollouts.
 - [Multi-Teacher KD](multi_teacher_kd.md) — route samples to domain-specific teachers.
 - [KD algorithms](../concepts/algorithms.md) — `vanilla_kd`, `simple_ctkd`, `dskd`.

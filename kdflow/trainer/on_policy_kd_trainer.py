@@ -168,7 +168,7 @@ class OnPolicyKDTrainer:
         self.start_time = time.time()
         num_micro_batches = self.args.train.train_batch_size // self.args.train.micro_train_batch_size
 
-        if self.eval_dataloader is not None and self.args.train.eval_steps > 0 and self.global_step == 0:
+        if self.eval_dataloader is not None and self.args.train.eval_steps < float("inf") and self.global_step == 0:
             self.strategy.log(f"Evaluating model at global step {self.global_step}")
             self.evaluate()
         

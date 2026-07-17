@@ -55,7 +55,7 @@ Defined in `kdflow/arguments/training_args.py`.
 | `--backend`                    | `fsdp2`                  | Training backend                                                  |
 | `--gradient_checkpointing`     | `False`                  | Enable gradient checkpointing                                     |
 | `--enable_sleep`               | `False`                  | Enable sleep mode for student / teacher / rollout                 |
-| `--eval_steps`                 | `-1`                     | Evaluate every N steps (-1 disables)                              |
+| `--eval_steps`                 | `-1`                     | Evaluation interval in global steps; set a positive value to enable periodic evaluation |
 | `--save_steps`                 | `-1`                     | Save checkpoint every N steps (-1 disables)                       |
 | `--save_path`                  | `./ckpt/`                | Final model save path                                             |
 | `--ckpt_path`                  | `./ckpt/checkpoints_distill` | Intermediate checkpoint path                                  |
@@ -139,9 +139,9 @@ Defined in `kdflow/arguments/data_args.py`.
 | `--train_dataset_path`        | `None`       | Training dataset path                                                      |
 | `--train_dataset_probs`       | `None`       | Sampling probabilities for multiple datasets                               |
 | `--train_split`               | `train`      | Train split name                                                           |
-| `--eval_dataset_path`         | `None`       | Evaluation dataset path                                                    |
+| `--eval_dataset_path`         | `None`       | Evaluation dataset path (see [Evaluation](../user_guide/evaluation.md))    |
 | `--eval_split`                | `eval`       | Eval split name                                                            |
-| `--custom_eval_fn`            | `None`       | Python file defining `eval_fn(predictions, labels)`                        |
+| `--custom_eval_fn`            | `None`       | On-policy Python file defining `eval_fn(predictions, labels)`              |
 | `--input_key`                 | `messages`   | Dataset input key                                                          |
 | `--output_key`                | `None`       | Dataset output key                                                         |
 | `--image_key`                 | `None`       | Image key for multimodal datasets                                          |
