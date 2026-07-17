@@ -56,6 +56,7 @@ Walk through every supported training scenario with annotated example scripts.
 - [Cross-Tokenizer KD](user_guide/cross_tokenizer_kd.md)
 - [Supervised Fine-Tuning](user_guide/sft.md)
 - [Multimodal (VLM) Distillation](user_guide/multimodal.md)
+- [Evaluation](user_guide/evaluation.md)
 
 **Concepts**
 

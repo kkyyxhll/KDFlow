@@ -16,7 +16,7 @@ evolve independently.
 |----------------------|-------------------|-------------------------------------------------------------------------------|
 | `StudentActorGroup`  | **FSDP2**         | Wraps the student model; runs forward / backward / optimizer step.            |
 | `TeacherActorGroup`  | **SGLang Engine** | Prefills the teacher and exposes its **last-layer hidden states**.            |
-| `RolloutActorGroup`  | **SGLang Engine** | (On-policy only) Generates student responses given the prompt batch.          |
+| `RolloutActorGroup`  | **SGLang Server** | (On-policy only) Generates student responses given the prompt batch.          |
 
 A **single Python controller** (the `Trainer`, see below) drives the loop and
 calls these actors via `ray.get(...)`. There is no synchronisation server.
