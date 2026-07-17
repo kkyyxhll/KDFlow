@@ -80,5 +80,5 @@ class DataArguments:
         metadata={"help": "Max prompt length."}
     )
     preprocess_num_workers: int = field(
-        default=8,
+        default=1,
     )

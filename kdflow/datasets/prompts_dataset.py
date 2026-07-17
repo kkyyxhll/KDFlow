@@ -87,7 +87,11 @@ class PromptDataset(Dataset):
             strategy.log(f"Truncating dataset from {len(dataset)} to {max_data_num}")
             dataset = dataset.select(range(max_data_num))
 
-        # Parallel loading datasets
+        # Adjust worker count based on dataset size to speed up preprocessing.
+        num_processors = min(
+            num_processors,
+            max(1, len(dataset) // 2000),
+        )
         self.processed_dataset = dataset.map(
             self.process_data,
             remove_columns=dataset.column_names,
@@ -102,7 +106,6 @@ class PromptDataset(Dataset):
             strategy.log(f"Before prompt_max_len filter: {len(self.processed_dataset)}")
             self.processed_dataset = self.processed_dataset.filter(
                 lambda x: x["prompt_len"] <= self.prompt_max_len,
-                num_proc=num_processors,
                 desc="Filtering overlang samples",
             )
             strategy.log(f"After prompt_max_len filter: {len(self.processed_dataset)}")

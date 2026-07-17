@@ -91,6 +91,11 @@ class SFTDataset(Dataset):
             self.strategy.log(f"Truncating dataset from {len(dataset)} to {max_data_num}")
             dataset = dataset.select(range(max_data_num))
 
+        # Adjust worker count based on dataset size to speed up preprocessing.
+        num_processors = min(
+            num_processors,
+            max(1, len(dataset) // 2000),
+        )
         self.processed_dataset = dataset.map(
             self.process_data,
             remove_columns=dataset.column_names,
@@ -103,7 +108,6 @@ class SFTDataset(Dataset):
         strategy.log(f"Before length filter: {len(self.processed_dataset)}")
         self.processed_dataset = self.processed_dataset.filter(
             lambda x: x["stu_input_len"] <= self.max_length,
-            num_proc=num_processors,
             desc="Filtering overlang samples",
         )
         if len(self.processed_dataset) < original_len:
