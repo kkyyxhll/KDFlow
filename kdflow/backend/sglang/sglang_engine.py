@@ -135,7 +135,7 @@ def _normalize_tags(tags):
 
 
 def _handle_generate(engine, request, hidden_queue, response_queue):
-    """Handle a generate request: run inference and send hidden states via shared memory."""
+    """Handle a generate request and stream hidden states via shared memory."""
     kwargs = request["kwargs"]
 
     generate_kwargs = {
@@ -146,14 +146,8 @@ def _handle_generate(engine, request, hidden_queue, response_queue):
     if kwargs.get("image_data") is not None:
         generate_kwargs["image_data"] = kwargs["image_data"]
 
-    outputs = engine.generate(**generate_kwargs)
-    num_samples = len(outputs)
-    expected_num_samples = len(kwargs["loss_masks"])
-    if num_samples != expected_num_samples:
-        raise RuntimeError(
-            f"SGLang returned {num_samples} outputs for "
-            f"{expected_num_samples} loss masks"
-        )
+    outputs = engine.generate(**generate_kwargs, stream=True)
+    num_samples = len(kwargs["loss_masks"])
 
     response_queue.put({
         "type": "generate",
@@ -161,9 +155,19 @@ def _handle_generate(engine, request, hidden_queue, response_queue):
         "num_samples": num_samples,
     })
 
-    for idx, (output, mask) in enumerate(zip(outputs, kwargs["loss_masks"])):
-        try:
-            hs_np = output["meta_info"]["hidden_states"][0]
+    received_indices = set()
+    try:
+        for output in outputs:
+            meta_info = output["meta_info"]
+            if meta_info.get("finish_reason") is None:
+                continue
+
+            idx = output["index"]
+            if idx in received_indices:
+                raise RuntimeError(f"Duplicate SGLang output index: {idx}")
+
+            mask = kwargs["loss_masks"][idx]
+            hs_np = meta_info["hidden_states"][0]
 
             # hs_np and mask may differ due to multimodal token expansion.
             hs_len = hs_np.shape[0]
@@ -189,16 +193,20 @@ def _handle_generate(engine, request, hidden_queue, response_queue):
                 hs_np = np.ascontiguousarray(hs_np)
 
             hs_tensor = torch.from_numpy(hs_np).share_memory_()
-            hidden_queue.put(hs_tensor)
-        except Exception as e:
-            import traceback
-            logger.error(
-                f"[_handle_generate] ERROR at sample={idx}/{num_samples}: {e}\n"
-                f"{traceback.format_exc()}"
+            hidden_queue.put((idx, hs_tensor))
+            received_indices.add(idx)
+
+        if len(received_indices) != num_samples:
+            raise RuntimeError(
+                f"SGLang returned {len(received_indices)} final outputs for "
+                f"{num_samples} samples"
             )
-            # Send sentinel None to notify the main process immediately
-            hidden_queue.put(None)
-            raise
+        hidden_queue.put(None)
+    except Exception:
+        import traceback
+        error = traceback.format_exc()
+        logger.error(f"[_handle_generate] ERROR:\n{error}")
+        hidden_queue.put(error)
 
 
 def _handle_sleep(engine, request, config, response_queue):
@@ -321,25 +329,28 @@ class SGLangEngineService:
             raise RuntimeError(f"Generate failed: {response.get('error')}")
 
         num_samples = response["num_samples"]
-        hidden_states = []
+        hidden_states = [None] * num_samples
+        received_count = 0
         t_recv_start = time.time()
-        for i in range(num_samples):
+        while True:
             try:
-                hs_tensor = self.hidden_queue.get(timeout=300)
-                # Sentinel None means the subprocess encountered an error
-                if hs_tensor is None:
-                    raise RuntimeError(
-                        f"Engine subprocess reported an error while processing "
-                        f"sample={i}/{num_samples}. Check subprocess logs for details."
-                    )
+                message = self.hidden_queue.get(timeout=300)
+                if message is None:
+                    break
+                if isinstance(message, str):
+                    raise RuntimeError(f"Generate failed in engine subprocess:\n{message}")
+
+                idx, hs_tensor = message
                 hs_np = hs_tensor.numpy().copy()
                 del hs_tensor
-                hidden_states.append(hs_np)
+                hidden_states[idx] = hs_np
+                received_count += 1
             except queue.Empty:
                 elapsed_total = time.time() - t_recv_start
                 raise RuntimeError(
                     f"Hidden state recv timeout while receiving hidden states, "
-                    f"sample={i}/{num_samples}, total_elapsed={elapsed_total:.1f}s"
+                    f"received={received_count}/{num_samples}, "
+                    f"total_elapsed={elapsed_total:.1f}s"
                 )
 
         return hidden_states
