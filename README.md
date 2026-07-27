@@ -17,6 +17,7 @@
 
 ## 🔥 News
 
+- **[2026/07]** 🎉 KDFlow v0.2.1 has been released, featuring **token-aligned teacher inputs**, **faster rollouts**, **evaluation support**, **streaming teacher hidden-state transfer**, and **structured logging**.
 - **[2026/07]** 🎉 KDFlow v0.2.0 has been released, featuring **chunked loss**, **multi-teacher distillation**, **EMA teacher update for OPSD**, **dynamic batch size**.
 - **[2026/06]** 🧑‍🏫 Support **multi-teacher distillation** for both off-policy and on-policy KD via `--multi_teacher_config` and per-sample `--teacher_routing_key`.
 - **[2026/06]** 🐳 New Docker image based on **sglang 0.5.12 + CUDA 12.9** is now available on [Docker Hub](https://hub.docker.com/repository/docker/songmzhang/kdflow/tags) — **recommended** going forward.
