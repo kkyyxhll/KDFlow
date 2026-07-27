@@ -2,6 +2,40 @@
 
 This page mirrors the **News** section of the project README.
 
+## 2026/07 — KDFlow v0.2.1
+
+🎉 KDFlow v0.2.1 focuses on **correctness**, **training throughput**,
+**evaluation**, and **observability** across SFT, off-policy KD, and on-policy
+KD workflows.
+
+### Correctness and reliability
+
+- The teacher SGLang engine now receives pre-tokenized `input_ids` instead of
+  raw text, avoiding duplicate tokenization and keeping teacher hidden states
+  exactly aligned with the loss mask.
+- Dataset schemas are validated before preprocessing, with clear errors for
+  missing required fields or columns.
+
+### Performance
+
+- Rollout concurrency now scales with the number of rollout engines, improving
+  rollout throughput by approximately **30%–40%**.
+- On-policy dynamic batching is applied before teacher forward to avoid
+  repeatedly copying teacher hidden states.
+- Dataset preprocessing is faster, especially for smaller datasets.
+- Teacher hidden states are streamed back asynchronously to reduce transfer
+  overhead.
+
+### Evaluation and logging
+
+- Periodic [evaluation](../user_guide/evaluation.md) is now supported for SFT,
+  off-policy KD, and on-policy KD, including custom evaluation functions for
+  on-policy workflows.
+- End-to-end step-time logging has been added to all training workflows.
+- Metrics now use structured `train/*`, `distill/*`, `rollout/*`, `timing/*`,
+  and `eval/*` namespaces. Existing dashboards that depend on previous metric
+  names may need to be updated.
+
 ## 2026/07 — KDFlow v0.2.0
 
 🎉 KDFlow v0.2.0 has been released. This release brings together recent upgrades
