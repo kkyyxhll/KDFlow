@@ -23,11 +23,18 @@ class VanillaKD:
 
     def compute_multi_teacher_logits(self, teacher_hiddens, teacher_loss_mask, routing_keys, start=None, end=None):
         per_sample_counts = teacher_loss_mask.sum(dim=1).tolist()
-        splits = teacher_hiddens.split(per_sample_counts, dim=0)
+        if isinstance(teacher_hiddens, torch.Tensor):
+            splits = teacher_hiddens.split(per_sample_counts, dim=0)
+        else:
+            if len(teacher_hiddens) != len(per_sample_counts):
+                raise ValueError("teacher_hiddens must contain one tensor per sample")
+            splits = teacher_hiddens
         if start is not None or end is not None:
             start = 0 if start is None else start
-            end = teacher_hiddens.shape[0] if end is None else end
-            offsets = torch.tensor([0] + per_sample_counts, device=teacher_hiddens.device).cumsum(0).tolist()
+            end = sum(per_sample_counts) if end is None else end
+            offsets = [0]
+            for count in per_sample_counts:
+                offsets.append(offsets[-1] + count)
             splits = [x[max(start - offsets[i], 0): max(min(end, offsets[i + 1]) - offsets[i], 0)] for i, x in enumerate(splits)]
         teacher_to_indices = {}
         for i, key in enumerate(routing_keys):

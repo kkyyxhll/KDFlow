@@ -83,7 +83,7 @@ class MultiTeacherActorGroup:
                     v = ray.get(v)
                 slots[mbid][i] = v
         for mbid, mb in enumerate(global_batch):
-            mb["teacher_hiddens"] = np.concatenate(slots[mbid], axis=0)
+            mb["teacher_hiddens"] = slots[mbid]
 
         return global_batch
     

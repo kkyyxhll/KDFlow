@@ -274,6 +274,14 @@ class StudentRayActor:
             else v
             for k, v in batch.items()
         }
+        if isinstance(micro_batch.get("teacher_hiddens"), list):
+            micro_batch["teacher_hiddens"] = [
+                torch.from_numpy(v).to(device, non_blocking=True)
+                if isinstance(v, np.ndarray)
+                else v.to(device) if isinstance(v, torch.Tensor)
+                else v
+                for v in micro_batch["teacher_hiddens"]
+            ]
 
         if "stu_multi_modal_inputs" in micro_batch:
             mm_kwargs = extract_multi_modal_inputs(micro_batch["stu_multi_modal_inputs"])
