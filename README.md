@@ -15,6 +15,16 @@
 
 ---
 
+## 💬 WeChat Group
+
+Welcome to join our WeChat group for discussion and communication!
+
+<p align="center">
+  <img src="figures/wechat.jpg" alt="WeChat Group QR Code" width="300">
+</p>
+
+---
+
 ## 🔥 News
 
 - **[2026/07]** 🎉 KDFlow v0.2.1 has been released, featuring **token-aligned teacher inputs**, **faster rollouts**, **evaluation support**, **streaming teacher hidden-state transfer**, and **structured logging**.
@@ -33,6 +43,7 @@
 
 ## 📑 Table of Contents
 
+- [💬 WeChat Group](#-wechat-group)
 - [🔥 News](#-news)
 - [✨ Key Features](#-key-features)
 - [🚀 Quick Start](#-quick-start)
@@ -46,7 +57,6 @@
 - [🙏 Acknowledgement](#-acknowledgement)
 - [📖 Citation](#-citation)
 - [📄 License](#-license)
-- [💬 WeChat Group](#-wechat-group)
 - [⭐ Star History](#-star-history)
 
 ---
@@ -239,16 +249,6 @@ If you find KDFlow useful in your research or work, please consider citing our p
 ## 📄 License
 
 This project is licensed under the [MIT License](LICENSE).
-
----
-
-## 💬 WeChat Group
-
-Welcome to join our WeChat group for discussion and communication!
-
-<p align="center">
-  <img src="figures/wechat.jpg" alt="WeChat Group QR Code" width="300">
-</p>
 
 ---
 
