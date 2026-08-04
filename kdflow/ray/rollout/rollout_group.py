@@ -377,7 +377,8 @@ class RolloutActorGroup:
             buffer = io.BytesIO()
             fmt = "PNG" if image.mode == "RGBA" else "JPEG"
             image.save(buffer, format=fmt)
-            return base64.b64encode(buffer.getvalue()).decode("utf-8")
+            encoded = base64.b64encode(buffer.getvalue()).decode("utf-8")
+            return f"data:image/{fmt.lower()};base64,{encoded}"
         raise TypeError(f"Unsupported image type: {type(image)}")
 
     @staticmethod

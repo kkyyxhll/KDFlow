@@ -2,6 +2,7 @@ from typing import Callable, Optional, Dict, List, Any
 
 import torch
 from torch.utils.data import Dataset
+from datasets import Image as ImageFeature
 from PIL import Image
 
 from kdflow.datasets.utils import (
@@ -103,11 +104,14 @@ class SFTDataset(Dataset):
             load_from_cache_file=False,
             desc="Processing data",
         )
+        if self.image_key:
+            self.processed_dataset = self.processed_dataset.cast_column("images", [ImageFeature()])
 
         original_len = len(self.processed_dataset)
         strategy.log(f"Before length filter: {len(self.processed_dataset)}")
         self.processed_dataset = self.processed_dataset.filter(
-            lambda x: x["stu_input_len"] <= self.max_length,
+            lambda stu_input_len: stu_input_len <= self.max_length,
+            input_columns=["stu_input_len"],
             desc="Filtering overlang samples",
         )
         if len(self.processed_dataset) < original_len:
@@ -213,11 +217,14 @@ class SFTDataset(Dataset):
         else:
             messages = convert_to_openai_messages(data[input_key], expand_image=has_image)
 
+        chat_template_kwargs = {}
+        if "enable_thinking" in str(apply_chat_template.__self__.chat_template):
+            chat_template_kwargs["enable_thinking"] = self.enable_thinking
         prompt = apply_chat_template(
             messages[:-1], tokenize=False, add_generation_prompt=True,
-            enable_thinking=self.enable_thinking,
+            **chat_template_kwargs,
         )
-        full_text = apply_chat_template(messages, tokenize=False, enable_thinking=self.enable_thinking)
+        full_text = apply_chat_template(messages, tokenize=False, **chat_template_kwargs)
         response = full_text[len(prompt):].removeprefix("<think>\n\n</think>\n\n").rstrip()
         return prompt, response
 

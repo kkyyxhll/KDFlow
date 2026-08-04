@@ -1,6 +1,7 @@
 from typing import Callable, Optional, Dict, Any, List
 
 from torch.utils.data import Dataset
+from datasets import Image as ImageFeature
 from PIL import Image
 
 from kdflow.datasets.utils import (
@@ -99,13 +100,16 @@ class PromptDataset(Dataset):
             load_from_cache_file=False,
             desc="Processing data",
         )
+        if self.image_key:
+            self.processed_dataset = self.processed_dataset.cast_column("images", [ImageFeature()])
 
         # Filter by prompt_max_len
         original_len = len(self.processed_dataset)
         if self.prompt_max_len > 0:
             strategy.log(f"Before prompt_max_len filter: {len(self.processed_dataset)}")
             self.processed_dataset = self.processed_dataset.filter(
-                lambda x: x["prompt_len"] <= self.prompt_max_len,
+                lambda prompt_len: prompt_len <= self.prompt_max_len,
+                input_columns=["prompt_len"],
                 desc="Filtering overlang samples",
             )
             strategy.log(f"After prompt_max_len filter: {len(self.processed_dataset)}")
@@ -187,11 +191,14 @@ class PromptDataset(Dataset):
             chat = convert_to_openai_messages(data[input_key], expand_image=self.image_key is not None)
             while chat and chat[-1].get("role", "user") == "assistant":
                 chat.pop()
+            chat_template_kwargs = {}
+            if "enable_thinking" in str(getattr(processor_or_tokenizer, "chat_template", "")):
+                chat_template_kwargs["enable_thinking"] = self.enable_thinking
             return processor_or_tokenizer.apply_chat_template(
                 chat,
                 tokenize=False,
                 add_generation_prompt=True,
-                enable_thinking=self.enable_thinking,
+                **chat_template_kwargs,
             )
         
         prompt = data[input_key]
