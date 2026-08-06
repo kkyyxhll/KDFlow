@@ -1,7 +1,6 @@
 import asyncio
 import base64
 import io
-import logging
 import multiprocessing
 import random
 import socket
@@ -9,7 +8,6 @@ import time
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import ray
-import requests
 from ray.util.placement_group import PlacementGroup
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
@@ -52,7 +50,6 @@ class RolloutActorGroup:
         num_gpus_per_node: Number of GPUs per physical node
         enable_memory_saver: Enable memory saver for sleep/wakeup support
         mem_fraction_static: Static memory fraction for SGLang servers
-        engine_concurrency: Maximum concurrent requests per rollout engine
         num_gpus_per_actor: Ray GPU resources per actor (fractional for co-location)
         pg: 3-tuple (pg, reordered_bundle_indices, reordered_gpu_ids), PlacementGroup, or None
         extra_server_args: Additional SGLang ServerArgs overrides
@@ -66,7 +63,6 @@ class RolloutActorGroup:
         num_gpus_per_node: int = 8,
         enable_memory_saver: bool = True,
         mem_fraction_static: Optional[float] = None,
-        engine_concurrency: int = 512,
         num_gpus_per_actor: float = 0.2,
         pg: Optional[Union[PlacementGroup, Tuple[PlacementGroup, list, list]]] = None,
         extra_server_args: Optional[dict] = None,
@@ -77,9 +73,6 @@ class RolloutActorGroup:
         self.num_gpus_per_node = num_gpus_per_node
         self.enable_memory_saver = enable_memory_saver
         self.mem_fraction_static = mem_fraction_static
-        if engine_concurrency <= 0:
-            raise ValueError(f"engine_concurrency must be positive, got {engine_concurrency}")
-        self.engine_concurrency = engine_concurrency
         self.extra_server_args = extra_server_args or {}
 
         self.num_gpus_per_actor_engine = tp_size
@@ -232,55 +225,49 @@ class RolloutActorGroup:
         ray.get(init_refs)
         logger.info(f"All {self.num_actors} rollout actors initialized and registered with router")
 
-    def generate(
+    async def generate_one(
         self,
-        prompts: List[str],
-        sampling_params: Optional[Dict[str, Any]] = None,
-        image_data: Optional[List] = None,
-    ) -> List[Dict[str, Any]]:
-        """Generate responses for a batch of prompts via the SGLang router."""
-        if not prompts:
-            return []
+        prompt: str,
+        sampling_params: Dict[str, Any],
+        session,
+        image_data=None,
+    ) -> Dict[str, Any]:
+        """Send one generation request through the SGLang router."""
+        import aiohttp
 
-        if sampling_params is None:
-            sampling_params = {
-                "temperature": 1.0,
-                "max_new_tokens": 2048,
-            }
+        payload = {
+            "text": prompt,
+            "sampling_params": sampling_params,
+        }
+        if image_data is not None:
+            if isinstance(image_data, list):
+                payload["image_data"] = [
+                    self._encode_image_to_base64(image) for image in image_data
+                ]
+            else:
+                payload["image_data"] = self._encode_image_to_base64(image_data)
 
+        max_retries = 2
         generate_url = f"{self.router_url}/generate"
-        max_concurrent = min(len(prompts), self.engine_concurrency * self.num_actors)
-        loop = asyncio.new_event_loop()
-        try:
-            results = loop.run_until_complete(
-                self._async_generate(
-                    router_url=generate_url,
-                    prompts=prompts,
-                    sampling_params=sampling_params,
-                    max_concurrent=max_concurrent,
-                    image_data=image_data,
-                )
-            )
-        except Exception:
+        for attempt in range(max_retries + 1):
             try:
-                engine_health = self.health_check()
-            except Exception as health_error:
-                engine_health = f"unavailable ({health_error!r})"
-            logger.exception(
-                "Rollout generation failed: prompts=%d, max_concurrent=%d, "
-                "router_url=%s, router_alive=%s, router_exitcode=%s, engine_health=%s",
-                len(prompts),
-                max_concurrent,
-                generate_url,
-                self.router_process.is_alive(),
-                self.router_process.exitcode,
-                engine_health,
-            )
-            raise
-        finally:
-            loop.close()
+                async with session.post(generate_url, json=payload) as response:
+                    response.raise_for_status()
+                    return await response.json()
+            except (aiohttp.ClientConnectionError, asyncio.TimeoutError) as error:
+                if attempt == max_retries:
+                    raise RuntimeError(
+                        f"Rollout request failed after {max_retries + 1} attempts "
+                        f"(prompt_chars={len(prompt)}, sampling_params={sampling_params})"
+                    ) from error
+                await asyncio.sleep(2 ** attempt)
+            except Exception as error:
+                raise RuntimeError(
+                    f"Rollout request failed "
+                    f"(prompt_chars={len(prompt)}, sampling_params={sampling_params})"
+                ) from error
 
-        return results
+        raise RuntimeError("Rollout request failed unexpectedly")
 
     def sleep(self, tags: Optional[list] = None):
         """Release GPU memory on all rollout actors (offload to CPU)."""
@@ -380,62 +367,3 @@ class RolloutActorGroup:
             encoded = base64.b64encode(buffer.getvalue()).decode("utf-8")
             return f"data:image/{fmt.lower()};base64,{encoded}"
         raise TypeError(f"Unsupported image type: {type(image)}")
-
-    @staticmethod
-    async def _async_generate(
-        router_url: str,
-        prompts: List[str],
-        sampling_params: Dict[str, Any],
-        max_concurrent: int,
-        image_data: Optional[List] = None,
-    ) -> List[Dict[str, Any]]:
-        """Send generation requests to the SGLang router asynchronously."""
-        import aiohttp
-
-        semaphore = asyncio.Semaphore(max_concurrent)
-        results = [None] * len(prompts)
-
-        async def _generate_one(idx: int, prompt: str, session: aiohttp.ClientSession):
-            payload = {
-                "text": prompt,
-                "sampling_params": sampling_params,
-            }
-            if image_data and image_data[idx] is not None:
-                img = image_data[idx]
-                if isinstance(img, list):
-                    payload["image_data"] = [RolloutActorGroup._encode_image_to_base64(im) for im in img]
-                else:
-                    payload["image_data"] = RolloutActorGroup._encode_image_to_base64(img)
-            max_retries = 2
-            for attempt in range(max_retries + 1):
-                try:
-                    async with semaphore:
-                        async with session.post(router_url, json=payload) as resp:
-                            resp.raise_for_status()
-                            output = await resp.json()
-                            results[idx] = output
-                    return
-                except (aiohttp.ClientConnectionError, asyncio.TimeoutError) as error:
-                    if attempt == max_retries:
-                        raise RuntimeError(
-                            f"Rollout request {idx} failed after {max_retries + 1} attempts "
-                            f"(prompt_chars={len(prompt)}, sampling_params={sampling_params})"
-                        ) from error
-                    delay = 2 ** attempt
-                    await asyncio.sleep(delay)
-                except Exception as error:
-                    raise RuntimeError(
-                        f"Rollout request {idx} failed "
-                        f"(prompt_chars={len(prompt)}, sampling_params={sampling_params})"
-                    ) from error
-
-        connector = aiohttp.TCPConnector(limit=max_concurrent)
-        timeout = aiohttp.ClientTimeout(total=None, sock_read=None, sock_connect=60)
-        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
-            tasks = [
-                asyncio.create_task(_generate_one(i, prompt, session))
-                for i, prompt in enumerate(prompts)
-            ]
-            await asyncio.gather(*tasks)
-
-        return results

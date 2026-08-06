@@ -41,7 +41,6 @@ def train(args):
         model_path=args.model.student_name_or_path,
         num_actors=args.rollout.rollout_num_engines,
         tp_size=args.rollout.rollout_tp_size,
-        engine_concurrency=args.rollout.rollout_engine_concurrency,
         num_gpus_per_node=args.train.num_gpus_per_node,
         enable_memory_saver=True,
         mem_fraction_static=args.rollout.rollout_mem_fraction_static,

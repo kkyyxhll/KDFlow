@@ -1,23 +1,18 @@
 import os
 import time
-import json
-from tqdm import tqdm
 from datetime import timedelta
-from typing import Dict, List, Optional, Callable, Any
+from typing import Callable, Dict, Optional
 from collections import defaultdict
 
 import ray
-import torch
-import torch.distributed as dist
 
-from kdflow.datasets.utils import get_tokenizer_or_processor
+from kdflow.trainer.rollout_manager import RolloutManager
 from kdflow.utils.logging_utils import (
     define_wandb_metrics,
     init_logger,
     log_eval_metrics,
     normalize_eval_metrics,
 )
-from kdflow.utils.utils import zero_pad_sequences
 from kdflow.utils.dynamic_bsz import rearrange_global_batch
 
 
@@ -61,7 +56,6 @@ class OnPolicyKDTrainer:
         self.student = student_model
         self.teacher = teacher_model
         self.rollout_group = rollout_group
-        self.is_same_tokenizer = is_same_tokenizer
         self.train_dataloader = train_dataloader
         self.eval_dataloader = eval_dataloader
         self.max_rollout_iters = max_rollout_iters
@@ -69,23 +63,12 @@ class OnPolicyKDTrainer:
         self.generate_kwargs = generate_kwargs
         self.custom_eval_fn = custom_eval_fn
         self.epochs = self.args.train.num_epochs
-        
-        self.image_key = getattr(self.args.data, "image_key", None)
-        self.student_processor = get_tokenizer_or_processor(
-            self.args.model.student_name_or_path,
-            need_processor=self.image_key is not None,
+        self.rollout_manager = RolloutManager(
+            strategy=strategy,
+            rollout_group=rollout_group,
+            is_same_tokenizer=is_same_tokenizer,
+            generate_kwargs=generate_kwargs,
         )
-        self.teacher_processors = {}
-        if self.args.kd.multi_teacher_config:
-            for teacher_key, teacher_path in self.args.kd.multi_teacher_config.items():
-                self.teacher_processors[teacher_key] = get_tokenizer_or_processor(
-                    teacher_path, need_processor=self.image_key is not None,
-                )
-        elif self.args.model.teacher_name_or_path and not self.is_same_tokenizer:
-            self.teacher_processors["default"] = get_tokenizer_or_processor(
-                self.args.model.teacher_name_or_path,
-                need_processor=self.image_key is not None,
-            )
         
         self.world_size = self.args.train.num_nodes * self.args.train.num_gpus_per_node
         self.dp_size = self.world_size // self.args.model.ring_attn_size
@@ -93,7 +76,6 @@ class OnPolicyKDTrainer:
         assert self.args.kd.kd_ratio == 1.0, "On-policy KD only supports kd_ratio=1.0."
         
         self.log_state = defaultdict(list)
-        self.eval_rollout_metrics = {}
         self._init_loggers()
     
     def _init_loggers(self) -> None:
@@ -181,10 +163,16 @@ class OnPolicyKDTrainer:
                 self.global_step += 1
                 
                 rollout_start = time.time()
-                rollout_samples = self.rollout(prompt_batch, mode="train", **self.generate_kwargs)
+                rollout_samples, rollout_metrics = self.rollout_manager.rollout(
+                    prompt_batch,
+                    global_step=self.global_step,
+                    mode="train",
+                )
                 rollout_time = time.time() - rollout_start
 
                 self.log_state["timing/rollout"].append(rollout_time)
+                for name, value in rollout_metrics.items():
+                    self.log_state[name].append(value)
 
                 all_global_batches = self._prepare_global_batches(rollout_samples, num_micro_batches)
 
@@ -297,7 +285,12 @@ class OnPolicyKDTrainer:
             return {}
 
         generate_kwargs = {**self.generate_kwargs, "temperature": 0.0}
-        rollout_samples = self.rollout(eval_prompts, mode="eval", **generate_kwargs)
+        rollout_samples, rollout_metrics = self.rollout_manager.rollout(
+            eval_prompts,
+            global_step=self.global_step,
+            mode="eval",
+            **generate_kwargs,
+        )
         predictions = sum((micro_batch["stu_responses"] for micro_batch in rollout_samples), [])
         labels = sum((micro_batch["labels"] for micro_batch in rollout_samples), [])
 
@@ -320,7 +313,7 @@ class OnPolicyKDTrainer:
         metrics = ray.get(self.student.async_run_eval(eval_batches))[0]
         if self.args.train.enable_sleep:
             self.student.sleep()
-        metrics.update(self.eval_rollout_metrics)
+        metrics.update(rollout_metrics)
 
         if self.custom_eval_fn is not None:
             custom_metrics = self.custom_eval_fn(predictions, labels)
@@ -329,279 +322,6 @@ class OnPolicyKDTrainer:
             metrics.update(normalize_eval_metrics(custom_metrics))
 
         return log_eval_metrics(self.strategy, self._wandb, metrics, self.global_step)
-            
-    def rollout(
-        self,
-        prompt_batch: List[Dict[str, str]],
-        mode: str = "train",
-        **kwargs,
-    ) -> List[dict]:
-        """Generate samples using rollout engine.
-
-        Args:
-            prompt_batch: List of dicts with keys: datasource, stu_prompt, tea_prompt, label
-            mode: Rollout mode, either "train" or "eval".
-            **kwargs: Additional arguments for generation
-
-        Returns:
-            List of rollout sample dicts containing generated samples
-        """
-        if mode not in ("train", "eval"):
-            raise ValueError(f"Unsupported rollout mode: {mode!r}")
-
-        if self.args.train.enable_sleep:
-            self.rollout_group.wakeup()
-
-        # Extract prompts and labels from batch
-        all_stu_prompts = [item["stu_prompt"] for item in prompt_batch]
-        all_tea_prompts = [item["tea_prompt"] for item in prompt_batch]
-        all_labels = [item["label"] for item in prompt_batch]
-        all_images = [item.get("images") for item in prompt_batch] if self.image_key else None
-        all_teacher_routing_keys = [item.get("teacher_routing_key") for item in prompt_batch] if self.args.kd.multi_teacher_config else None
-        
-        # Expand prompt list based on the number of samples per prompt
-        n_samples_per_prompt = self.args.rollout.n_samples_per_prompt if mode == "train" else 1
-        all_stu_prompts = sum([[p] * n_samples_per_prompt for p in all_stu_prompts], [])
-        all_tea_prompts = sum([[p] * n_samples_per_prompt for p in all_tea_prompts], [])
-        all_labels = sum([[label] * n_samples_per_prompt for label in all_labels], [])
-        if all_images:
-            all_images = sum([[imgs] * n_samples_per_prompt for imgs in all_images], [])
-        if all_teacher_routing_keys:
-            all_teacher_routing_keys = sum([[key] * n_samples_per_prompt for key in all_teacher_routing_keys], [])
-        
-        sampling_params = kwargs or self.generate_kwargs
-        all_outputs = self.rollout_group.generate(
-            all_stu_prompts, sampling_params, image_data=all_images
-        )
-
-        rollout_dir = os.path.join(self.args.train.save_path, "rollout_data")
-        if mode == "eval":
-            rollout_dir = os.path.join(rollout_dir, "val")
-        os.makedirs(rollout_dir, exist_ok=True)
-        rollout_path = os.path.join(rollout_dir, f"{self.global_step}.jsonl")
-        with open(rollout_path, "w") as f:
-            for prompt, output, label in zip(all_stu_prompts, all_outputs, all_labels):
-                rollout_record = {"prompt": prompt, "output": output["text"]}
-                if "reward_result" in output:
-                    rollout_record["reward_result"] = output["reward_result"]
-                if label is not None and label != "":
-                    rollout_record["label"] = label
-                f.write(json.dumps(rollout_record, ensure_ascii=False) + "\n")
-
-        # Process outputs into rollout samples
-        sample_list = [
-            self._build_rollout_sample(
-                stu_prompt=all_stu_prompts[i],
-                tea_prompt=all_tea_prompts[i],
-                output=all_outputs[i],
-                label=all_labels[i],
-                images=all_images[i] if all_images and all_images[i] else None,
-                teacher_routing_key=all_teacher_routing_keys[i] \
-                if all_teacher_routing_keys and all_teacher_routing_keys[i] else None,
-            )
-            for i in range(len(all_outputs))
-        ]
-
-        # Compute rollout-level length statistics before samples are split into
-        # micro-batches. The scalar fields are only needed for logging, so remove
-        # them before sending samples through the teacher/student pipeline.
-        length_names = ("prompt_length", "response_length", "total_length")
-        length_values = {
-            name: [sample.pop(name).item() for sample in sample_list]
-            for name in length_names
-        }
-        metric_prefix = "rollout" if mode == "train" else "eval"
-        rollout_metrics = {}
-        for name, values in length_values.items():
-            rollout_metrics[f"{metric_prefix}/{name}/mean"] = sum(values) / len(values)
-            rollout_metrics[f"{metric_prefix}/{name}/max"] = max(values)
-        max_response_length = sampling_params["max_new_tokens"]
-        response_lengths = length_values["response_length"]
-        rollout_metrics[f"{metric_prefix}/response_clip_ratio"] = sum(
-            length >= max_response_length for length in response_lengths
-        ) / len(response_lengths)
-
-        if mode == "train":
-            for name, value in rollout_metrics.items():
-                self.log_state[name].append(value)
-        else:
-            self.eval_rollout_metrics = rollout_metrics
-        
-        # Print sample for debugging
-        sample0 = sample_list[0]["stu_prompts"][0] + sample_list[0]["stu_responses"][0]
-        if mode == "train" and self.args.rollout.print_rollout_sample:
-            print(sample0)
-        
-        micro_batch_list = self._collate_micro_batches(sample_list, self.args.train.micro_train_batch_size)
-        
-        if self.args.train.enable_sleep:
-            self.rollout_group.sleep()
-
-        return micro_batch_list
-    
-    @staticmethod
-    def _collate_values(key: str, values: list):
-        v0 = values[0]
-        if isinstance(v0, torch.Tensor):
-            return zero_pad_sequences(values, side="right", value=0)
-        if isinstance(v0, list):
-            return sum(values, [])
-        if v0 is None:
-            return None
-        return values
-
-    def _collate_micro_batches(self, sample_list: List[Dict], batch_size: int) -> List[Dict]:
-        """Collate single samples into micro-batches."""
-        micro_batch_list = []
-        for i in range(0, len(sample_list), batch_size):
-            batch_samples = sample_list[i : i + batch_size]
-            micro_batch = {
-                key: self._collate_values(key, [s[key] for s in batch_samples])
-                for key in batch_samples[0]
-            }
-            micro_batch_list.append(micro_batch)
-        return micro_batch_list
-
-    def _tokenize_sample(
-        self, 
-        prompt: str, 
-        response: str, 
-        processor,
-        prefix: str,
-        images=None,
-    ) -> Dict[str, Any]:
-        """Tokenize prompt + response for a single sample.
-
-        Args:
-            prompt: Chat-templated prompt string.
-            response: Response string.
-            processor: Processor or tokenizer for the model.
-            prefix: 'stu' or 'tea'.
-            images: PIL images (or None for text-only).
-
-        Returns:
-            Dict with ``{prefix}_input_ids``, ``{prefix}_attn_mask``, ``{prefix}_loss_mask``
-            and optional multimodal fields.
-        """
-        tokenizer = getattr(processor, "tokenizer", processor)
-        resp_tok = tokenizer(response, return_tensors="pt", add_special_tokens=False)
-        resp_len = resp_tok["input_ids"].shape[1]
-
-        full_input = {"text": prompt + response}
-        if images:
-            full_input["images"] = images
-        full_tok = processor(**full_input, return_tensors="pt", add_special_tokens=False)
-        prompt_len = full_tok["input_ids"].shape[1] - resp_len
-
-        # since rollout response does not contain eos token, we need to add it manually
-        eos_token_id = tokenizer.eos_token_id
-        input_ids = torch.cat([full_tok["input_ids"][0], full_tok["input_ids"][0].new_tensor([eos_token_id])])
-        attn_mask = torch.cat([full_tok["attention_mask"][0], full_tok["attention_mask"][0].new_ones(1)])
-        loss_mask = torch.tensor(
-            [False] * (prompt_len - 1) + [True] * (resp_len + 1) + [False],
-            device=input_ids.device,
-        )
-
-        result = {
-            f"{prefix}_input_ids": input_ids,
-            f"{prefix}_attn_mask": attn_mask,
-            f"{prefix}_loss_mask": loss_mask,
-            f"_{prefix}_prompt_length": prompt_len,
-        }
-        multi_modal_inputs = {
-            k: torch.as_tensor(v) for k, v in full_tok.items()
-            if k not in ("input_ids", "attention_mask", "mm_token_type_ids")
-        }
-        if multi_modal_inputs:
-            result[f"_{prefix}_multi_modal_inputs"] = multi_modal_inputs
-
-        return result
-
-    def _get_teacher_processor(self, teacher_routing_key=None):
-        """Get the teacher processor for the given routing key."""
-        if teacher_routing_key and teacher_routing_key in self.teacher_processors:
-            return self.teacher_processors[teacher_routing_key]
-        if "default" in self.teacher_processors:
-            return self.teacher_processors["default"]
-        return self.student_processor
-
-    def _build_rollout_sample(
-        self,
-        stu_prompt: str,
-        tea_prompt: str,
-        output,
-        label: str,
-        images=None,
-        teacher_routing_key=None,
-    ) -> Dict[str, Any]:
-        """
-        Build a single rollout sample with both student and teacher tokenizations.
-        
-        Args:
-            stu_prompt: Student prompt string (formatted with student's chat template)
-            tea_prompt: Teacher prompt string (formatted with teacher's chat template)
-            output: rollout output object
-            label: Label string
-            images: PIL images (or None for text-only).
-            teacher_routing_key: Routed teacher key for multi-teacher distillation.
-        Returns:
-            Dict containing all sample fields
-        """
-        # Decode response using student tokenizer
-        response_ids = output["output_ids"]
-        response_text = output["text"]
-        
-        stu_tokens = self._tokenize_sample(
-            stu_prompt, response_text, self.student_processor, "stu", images=images
-        )
-        
-        if not self.is_same_tokenizer or tea_prompt != stu_prompt:
-            teacher_processor = self._get_teacher_processor(teacher_routing_key)
-            tea_tokens = self._tokenize_sample(
-                tea_prompt, response_text, teacher_processor, "tea", images=images
-            )
-        else:
-            tea_tokens = {
-                "tea_input_ids": stu_tokens["stu_input_ids"].clone(),
-                "tea_attn_mask": stu_tokens["stu_attn_mask"].clone(),
-                "tea_loss_mask": stu_tokens["stu_loss_mask"].clone(),
-            }
-        
-        prompt_length = stu_tokens["_stu_prompt_length"]
-        response_length = len(response_ids)
-        total_length = stu_tokens["stu_attn_mask"].sum().item()
-        
-        # Teacher feed input_ids for SGLang. Text: reuse tea_input_ids (exact).
-        # Multimodal: tokenize raw text (single image placeholder) so SGLang re-expands it.
-        teacher_processor = self._get_teacher_processor(teacher_routing_key)
-        tokenizer = getattr(teacher_processor, "tokenizer", teacher_processor)
-        if images:
-            feed_ids = tokenizer(tea_prompt + response_text, add_special_tokens=False)["input_ids"]
-            tea_feed_input_ids = feed_ids + [tokenizer.eos_token_id]
-        else:
-            tea_feed_input_ids = tea_tokens["tea_input_ids"].tolist()
-
-        sample = {
-            **{k: v for k, v in tea_tokens.items() if not k.startswith("_")},
-            **{k: v for k, v in stu_tokens.items() if not k.startswith("_")},
-            "tea_feed_input_ids": [tea_feed_input_ids],
-            "rollout_log_probs": None,
-            "stu_prompts": [stu_prompt],
-            "stu_responses": [response_text],
-            "tea_prompts": [tea_prompt],
-            "labels": [label],
-            "prompt_length": torch.FloatTensor([[prompt_length]]),
-            "response_length": torch.FloatTensor([[response_length]]),
-            "total_length": torch.FloatTensor([[total_length]]),
-        }
-        stu_mm = stu_tokens.get("_stu_multi_modal_inputs")
-        if stu_mm is not None:
-            sample["stu_multi_modal_inputs"] = [stu_mm]
-        if images:
-            sample["images"] = [images]
-        if teacher_routing_key is not None:
-            sample["teacher_routing_key"] = teacher_routing_key
-        return sample
             
     def logging(self):
         if self.global_step % self.args.log.logging_steps == 0:
