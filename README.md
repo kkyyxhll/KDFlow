@@ -11,6 +11,8 @@
   [![WeChat](https://img.shields.io/badge/WeChat-Group-07C160?logo=wechat&logoColor=white)](#-wechat-group)
   [![Stars](https://img.shields.io/github/stars/songmzhang/KDFlow?style=social)](https://github.com/songmzhang/KDFlow)
 
+  ⭐ If you find KDFlow useful, please consider starring the repository. Your support helps us continue improving the project.
+
 </div>
 
 ---
