@@ -17,7 +17,7 @@ from tqdm import tqdm
 from transformers.trainer import get_scheduler
 from transformers import AutoConfig
 from huggingface_hub import hf_hub_download
-from safetensors.torch import load_file
+from safetensors import safe_open
 
 from kdflow.models import DistillModel
 from kdflow.utils.distributed_util import stateless_init_process_group, torch_dist_barrier_and_cuda_sync
@@ -199,7 +199,10 @@ class StudentRayActor:
 
         def resolve_file(filename):
             if is_local:
-                return os.path.join(model_name_or_path, filename)
+                path = os.path.join(model_name_or_path, filename)
+                if not os.path.isfile(path):
+                    raise FileNotFoundError(path)
+                return path
             return hf_hub_download(repo_id=model_name_or_path, filename=filename)
 
         def try_load_index():
@@ -216,21 +219,22 @@ class StudentRayActor:
 
         EMBED_KEYS = ("model.embed_tokens.weight", "model.language_model.embed_tokens.weight")
 
-        def resolve_target_key(weight_map):
-            if weight_map and "lm_head.weight" in weight_map:
+        def resolve_target_key(keys):
+            if "lm_head.weight" in keys:
                 return "lm_head.weight"
             if getattr(config, "tie_word_embeddings", True):
                 for cand in EMBED_KEYS:
-                    if weight_map is None or cand in weight_map:
+                    if cand in keys:
                         return cand
             raise ValueError(f"Could not find lm_head.weight or any of {EMBED_KEYS} in checkpoint.")
 
         weight_map, use_safetensors = try_load_index()
-        target_key = resolve_target_key(weight_map)
 
         if weight_map:
+            target_key = resolve_target_key(weight_map)
             checkpoint_file = resolve_file(weight_map[target_key])
         else:
+            target_key = None
             for name, safetensors in [("model.safetensors", True), ("pytorch_model.bin", False)]:
                 try:
                     checkpoint_file = resolve_file(name)
@@ -241,24 +245,26 @@ class StudentRayActor:
             else:
                 raise FileNotFoundError(f"No checkpoint file found in {model_name_or_path}")
 
-        state_dict = load_file(checkpoint_file) if use_safetensors else torch.load(checkpoint_file, map_location="cpu")
-
-        if "lm_head.weight" in state_dict:
-            weight_key = "lm_head.weight"
+        if use_safetensors:
+            with safe_open(checkpoint_file, framework="pt", device="cpu") as f:
+                keys = f.keys()
+                weight_key = target_key or resolve_target_key(keys)
+                weight = f.get_tensor(weight_key)
+                bias = f.get_tensor("lm_head.bias") if "lm_head.bias" in keys else None
         else:
-            weight_key = next((k for k in EMBED_KEYS if k in state_dict), None)
-        if weight_key is None:
-            raise ValueError(f"None of 'lm_head.weight' or {EMBED_KEYS} found. Available: {list(state_dict.keys())[:10]}...")
-        weight = state_dict[weight_key]
+            state_dict = torch.load(checkpoint_file, map_location="cpu")
+            weight_key = target_key or resolve_target_key(state_dict)
+            weight = state_dict[weight_key]
+            bias = state_dict.get("lm_head.bias")
 
         assert weight.shape == (vocab_size, hidden_size), \
             f"Shape mismatch: expected ({vocab_size}, {hidden_size}), got {weight.shape}"
 
-        has_bias = "lm_head.bias" in state_dict
+        has_bias = bias is not None
         lm_head = nn.Linear(hidden_size, vocab_size, bias=has_bias)
         lm_head.weight = nn.Parameter(weight.to(dtype=dtype))
         if has_bias:
-            lm_head.bias = nn.Parameter(state_dict["lm_head.bias"].to(dtype=dtype))
+            lm_head.bias = nn.Parameter(bias.to(dtype=dtype))
 
         lm_head = lm_head.to(device).eval()
         lm_head.requires_grad_(False)
