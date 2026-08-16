@@ -17,7 +17,6 @@ from tqdm import tqdm
 from transformers.trainer import get_scheduler
 from transformers import AutoConfig
 from huggingface_hub import hf_hub_download
-from safetensors import safe_open
 
 from kdflow.models import DistillModel
 from kdflow.utils.distributed_util import stateless_init_process_group, torch_dist_barrier_and_cuda_sync
@@ -246,6 +245,8 @@ class StudentRayActor:
                 raise FileNotFoundError(f"No checkpoint file found in {model_name_or_path}")
 
         if use_safetensors:
+            from safetensors import safe_open
+
             with safe_open(checkpoint_file, framework="pt", device="cpu") as f:
                 keys = f.keys()
                 weight_key = target_key or resolve_target_key(keys)
