@@ -29,6 +29,7 @@ Welcome to join our WeChat group for discussion and communication!
 
 ## 🔥 News
 
+- **[2026/08]** 🎉🎉 KDFlow has been accepted to the EMNLP 2026 System Demonstrations Track!
 - **[2026/07]** 🎉 KDFlow v0.2.1 has been released, featuring **token-aligned teacher inputs**, **faster rollouts**, **evaluation support**, **streaming teacher hidden-state transfer**, and **structured logging**.
 - **[2026/07]** 🎉 KDFlow v0.2.0 has been released, featuring **chunked loss**, **multi-teacher distillation**, **EMA teacher update for OPSD**, **dynamic batch size**.
 - **[2026/06]** 🧑‍🏫 Support **multi-teacher distillation** for both off-policy and on-policy KD via `--multi_teacher_config` and per-sample `--teacher_routing_key`.
