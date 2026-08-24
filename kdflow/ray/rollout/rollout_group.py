@@ -74,6 +74,7 @@ class RolloutActorGroup:
         self.enable_memory_saver = enable_memory_saver
         self.mem_fraction_static = mem_fraction_static
         self.extra_server_args = extra_server_args or {}
+        self.active_lora_name: Optional[str] = None
 
         self.num_gpus_per_actor_engine = tp_size
 
@@ -239,6 +240,8 @@ class RolloutActorGroup:
             "text": prompt,
             "sampling_params": sampling_params,
         }
+        if self.active_lora_name is not None:
+            payload["lora_path"] = self.active_lora_name
         if image_data is not None:
             if isinstance(image_data, list):
                 payload["image_data"] = [
@@ -268,6 +271,36 @@ class RolloutActorGroup:
                 ) from error
 
         raise RuntimeError("Rollout request failed unexpectedly")
+
+    def update_lora_adapter(self, adapter: dict, lora_name: str):
+        previous_lora_name = self.active_lora_name
+        if previous_lora_name is not None:
+            ray.get([
+                actor.unload_lora_adapter.remote(previous_lora_name)
+                for actor in self.actors
+            ])
+            self.active_lora_name = None
+
+        adapter_ref = ray.put(adapter)
+        load_refs = [
+            actor.load_lora_adapter.remote(lora_name, adapter_ref)
+            for actor in self.actors
+        ]
+        errors = []
+        for ref in load_refs:
+            try:
+                ray.get(ref)
+            except Exception as error:
+                errors.append(error)
+
+        if errors:
+            ray.get([
+                actor.unload_lora_adapter.remote(lora_name, ignore_errors=True)
+                for actor in self.actors
+            ])
+            raise RuntimeError(f"Failed to update LoRA adapter {lora_name}") from errors[0]
+
+        self.active_lora_name = lora_name
 
     def sleep(self, tags: Optional[list] = None):
         """Release GPU memory on all rollout actors (offload to CPU)."""

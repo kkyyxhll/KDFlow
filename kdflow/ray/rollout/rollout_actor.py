@@ -161,6 +161,34 @@ class RolloutRayActor:
                 time.sleep(1)
         raise TimeoutError("Timeout while flushing cache.")
 
+    def load_lora_adapter(self, lora_name: str, adapter: dict):
+        from sglang.srt.utils import MultiprocessingSerializer
+
+        serialized_tensors = MultiprocessingSerializer.serialize(
+            adapter["state_dict"], output_str=True
+        )
+        return self._make_request(
+            "load_lora_adapter_from_tensors",
+            {
+                "lora_name": lora_name,
+                "config_dict": adapter["config_dict"],
+                "serialized_tensors": serialized_tensors,
+            },
+        )
+
+    def unload_lora_adapter(self, lora_name: str, ignore_errors: bool = False):
+        try:
+            return self._make_request(
+                "unload_lora_adapter",
+                {"lora_name": lora_name},
+            )
+        except Exception:
+            if not ignore_errors:
+                raise
+            logger.warning(
+                f"[RolloutActor {self.rank}] Failed to unload LoRA adapter {lora_name}"
+            )
+
     def update_weights_from_tensor(
         self,
         serialized_named_tensors: list,

@@ -451,6 +451,9 @@ class StudentRayActor:
             if p.requires_grad:
                 self.ema_state[n].mul_(decay).add_(p.detach().cpu(), alpha=1 - decay)
         
+    def export_lora_adapter(self):
+        return self.strategy.export_lora_adapter(self.student.model)
+
     def connect_rollout_engines(self, rollout_engines, rollout_tp_size=1):
         """Create Gloo IPC groups for weight sync (following slime)."""
         import torch.distributed as dist

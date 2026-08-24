@@ -19,6 +19,10 @@ from kdflow.utils.utils import get_tokenizer, load_custom_eval_fn
 
 
 def train(args):
+    use_lora = args.model.lora_rank > 0
+    if use_lora and args.model.student_name_or_path == args.model.teacher_name_or_path:
+        raise ValueError("On-policy LoRA does not support self-distillation yet.")
+
     # Initialize Ray if not already initialized
     if not ray.is_initialized():
         ray.init(
@@ -37,6 +41,20 @@ def train(args):
     # Create placement group for resource allocation
     num_gpus = args.train.num_nodes * args.train.num_gpus_per_node
     pg, reordered_bundle_indices, reordered_gpu_ids = create_placement_group(num_gpus)
+
+    rollout_server_args = None
+    if use_lora:
+        target_modules = args.model.target_modules
+        if isinstance(target_modules, str):
+            target_modules = ["all"] if target_modules == "all-linear" else [target_modules]
+        rollout_server_args = {
+            "enable_lora": True,
+            "max_lora_rank": args.model.lora_rank,
+            "lora_target_modules": target_modules,
+            "max_loaded_loras": 2,
+            "max_loras_per_batch": 1,
+        }
+
     rollout_group = RolloutActorGroup(
         model_path=args.model.student_name_or_path,
         num_actors=args.rollout.rollout_num_engines,
@@ -46,6 +64,7 @@ def train(args):
         mem_fraction_static=args.rollout.rollout_mem_fraction_static,
         num_gpus_per_actor=0.01,
         pg=(pg, reordered_bundle_indices, reordered_gpu_ids),
+        extra_server_args=rollout_server_args,
     )
     if args.train.enable_sleep:
         rollout_group.sleep()

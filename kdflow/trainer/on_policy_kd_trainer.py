@@ -63,6 +63,7 @@ class OnPolicyKDTrainer:
         self.generate_kwargs = generate_kwargs
         self.custom_eval_fn = custom_eval_fn
         self.epochs = self.args.train.num_epochs
+        self.use_lora = self.args.model.lora_rank > 0
         self.rollout_manager = RolloutManager(
             strategy=strategy,
             rollout_group=rollout_group,
@@ -133,6 +134,38 @@ class OnPolicyKDTrainer:
         log_config("Learning Rate:", self.args.train.learning_rate)
         log_config("KD Algorithm:", self.args.kd.kd_algorithm)
         log_config("KD Loss Function:", self.args.kd.kd_loss_fn)
+
+    def _sync_rollout_policy(self):
+        if self.args.train.enable_sleep:
+            self.rollout_group.wakeup(tags=["weights"])
+        try:
+            if self.use_lora:
+                adapter = self.student.export_lora_adapter()
+                lora_name = f"step-{self.global_step:08d}"
+                self.rollout_group.update_lora_adapter(adapter, lora_name)
+            else:
+                self.student.update_rollout_weights()
+        finally:
+            if self.args.train.enable_sleep:
+                self.rollout_group.sleep(tags=["weights"])
+
+    def _prepare_global_batches(self, rollout_samples, num_micro_batches):
+        all_global_batches = []
+        for i in range(0, len(rollout_samples), num_micro_batches):
+            global_batch = rollout_samples[i : i + num_micro_batches]
+            if self.args.train.use_dynamic_bsz:
+                global_batch = rearrange_global_batch(
+                    global_batch,
+                    max_token_len=self.args.train.max_token_len_per_gpu,
+                    dp_size=self.dp_size,
+                )
+
+            batch_tokens = sum(mb["stu_loss_mask"].sum() for mb in global_batch)
+            avg_micro_batch_token_num = batch_tokens / len(global_batch)
+            for micro_batch in global_batch:
+                micro_batch["avg_micro_batch_token_num"] = avg_micro_batch_token_num
+            all_global_batches.append(global_batch)
+        return all_global_batches
     
     def fit(self, global_step=0, start_epoch=0):
         self.global_step = global_step
@@ -140,9 +173,12 @@ class OnPolicyKDTrainer:
         # Print training configuration and initialize loggers
         self._print_training_config()
 
-        # Create Gloo IPC groups between training ranks and rollout engines (following slime)
-        rollout_tp_size = getattr(self.args.rollout, "rollout_tp_size", 1)
-        self.student.connect_rollout_engines(self.rollout_group.actors, rollout_tp_size)
+        # Sync model weights before training
+        if not self.use_lora:
+            rollout_tp_size = getattr(self.args.rollout, "rollout_tp_size", 1)
+            self.student.connect_rollout_engines(self.rollout_group.actors, rollout_tp_size)
+        self._sync_rollout_policy()
+            
         if self.args.model.student_name_or_path == self.args.model.teacher_name_or_path:   # for self-distillation
             num_gpus_per_teacher_actor = self.args.kd.teacher_tp_size * self.args.kd.teacher_pp_size
             self.student.connect_teacher_actors(self.teacher.teacher_engines, num_gpus_per_teacher_actor)
@@ -211,14 +247,9 @@ class OnPolicyKDTrainer:
                 
                 ray.get([actor.empty_cache.remote() for actor in self.student._actor_handlers])
 
-                # update weights in rollout actors
-                if self.args.train.enable_sleep:
-                    self.rollout_group.wakeup(tags=["weights"])
                 update_start = time.time()
-                self.student.update_rollout_weights()
+                self._sync_rollout_policy()
                 self.log_state["timing/rollout_weight_sync"].append(time.time() - update_start)
-                if self.args.train.enable_sleep:
-                    self.rollout_group.sleep(tags=["weights"])
                 
                 # update weights in teacher actors (only for self-distillation)
                 if self.args.model.teacher_name_or_path == self.args.model.student_name_or_path \
@@ -259,25 +290,7 @@ class OnPolicyKDTrainer:
 
         if self._wandb is not None:
             self._wandb.finish()
-
-    def _prepare_global_batches(self, rollout_samples, num_micro_batches):
-        all_global_batches = []
-        for i in range(0, len(rollout_samples), num_micro_batches):
-            global_batch = rollout_samples[i : i + num_micro_batches]
-            if self.args.train.use_dynamic_bsz:
-                global_batch = rearrange_global_batch(
-                    global_batch,
-                    max_token_len=self.args.train.max_token_len_per_gpu,
-                    dp_size=self.dp_size,
-                )
-
-            batch_tokens = sum(mb["stu_loss_mask"].sum() for mb in global_batch)
-            avg_micro_batch_token_num = batch_tokens / len(global_batch)
-            for micro_batch in global_batch:
-                micro_batch["avg_micro_batch_token_num"] = avg_micro_batch_token_num
-            all_global_batches.append(global_batch)
-        return all_global_batches
-
+            
     def evaluate(self):
         """Evaluate on validation set."""
         eval_prompts = sum(self.eval_dataloader, [])

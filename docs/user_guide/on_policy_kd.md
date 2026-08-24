@@ -52,6 +52,22 @@ Key extra flags compared to off-policy:
 --kd_algorithm vanilla_kd
 ```
 
+## LoRA training
+
+Enable LoRA with the existing model arguments:
+
+```bash
+--lora_rank 16 \
+--lora_alpha 32 \
+--target_modules all-linear \
+--lora_dropout 0.0
+```
+
+KDFlow publishes the initial adapter before the first rollout and refreshes it
+after every student update. Only adapter weights are gathered from FSDP and sent
+to SGLang; the frozen base model is not transferred.
+
+
 ## Self-distillation: teacher-from-student weight sync
 
 When the student and teacher start from the **same model path**, KDFlow can

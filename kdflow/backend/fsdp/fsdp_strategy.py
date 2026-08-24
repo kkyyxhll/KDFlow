@@ -511,6 +511,51 @@ class FSDP2Strategy(ABC):
                     if isinstance(value, torch.Tensor):
                         state[key] = value.to(device, non_blocking=True)
 
+    @torch.no_grad()
+    def export_lora_adapter(self, model, adapter_name: str = "default") -> dict | None:
+        model = self._unwrap_model(model)
+        if not isinstance(model, PeftModel):
+            raise TypeError("LoRA export requires a PeftModel.")
+
+        config = model.peft_config.get(adapter_name)
+        if config.use_dora or config.bias != "none" or config.modules_to_save:
+            raise ValueError("On-policy LoRA sync supports standard LoRA weights only.")
+
+        options = StateDictOptions(
+            full_state_dict=True,
+            cpu_offload=True,
+            ignore_frozen_params=True,
+        )
+        state_dict = get_model_state_dict(model, options=options)
+        if not self.is_rank_0():
+            return None
+
+        adapter_state_dict = get_peft_model_state_dict(
+            model, 
+            state_dict=state_dict,
+            adapter_name=adapter_name,
+        )
+        if not adapter_state_dict:
+            raise RuntimeError("No LoRA weights were exported.")
+
+        target_modules = config.target_modules
+        if isinstance(target_modules, set):
+            target_modules = sorted(target_modules)
+
+        return {
+            "config_dict": {
+                "r": config.r,
+                "lora_alpha": config.lora_alpha,
+                "target_modules": target_modules,
+                "use_dora": False,
+                "peft_type": "LORA",
+            },
+            "state_dict": {
+                name: tensor.detach().cpu().contiguous()
+                for name, tensor in adapter_state_dict.items()
+            },
+        }
+
     def update_rollout_weights_from_tensor(
         self, model, engine, gather_src, gather_group,
         update_weight_buffer_size=2 * 1024**3,

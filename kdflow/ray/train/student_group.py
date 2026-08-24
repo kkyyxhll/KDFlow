@@ -181,6 +181,12 @@ class StudentActorGroup:
     def wakeup(self):
         return ray.get([actor.wakeup.remote() for actor in self._actor_handlers])
     
+    def export_lora_adapter(self):
+        results = ray.get([actor.export_lora_adapter.remote() for actor in self._actor_handlers])
+        if results[0] is None:
+            raise RuntimeError("Student rank 0 did not export a LoRA adapter.")
+        return results[0]
+
     def connect_rollout_engines(self, rollout_actors, rollout_tp_size=1):
         """Create Gloo IPC groups between training ranks and rollout engines.
 
