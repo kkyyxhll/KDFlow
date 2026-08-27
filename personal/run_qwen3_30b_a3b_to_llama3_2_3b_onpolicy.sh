@@ -57,7 +57,7 @@ OPTS+=" --teacher_tp_size 4"
 OPTS+=" --teacher_mem_fraction_static 0.6"
 
 # ============ LoggingArguments ============
-OPTS+=" --logging_steps 10"
+OPTS+=" --logging_steps 1"
 OPTS+=" --use_wandb True"
 OPTS+=" --sync_swanlab True"
 OPTS+=" --wandb_project KDFlow"
