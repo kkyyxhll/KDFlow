@@ -18,18 +18,6 @@ class RolloutDataProcessor:
         self.image_key = getattr(self.args.data, "image_key", None)
         self.reward_fn: Optional[Callable] = self._load_reward_fn()
 
-    def _load_reward_fn(self) -> Optional[Callable]:
-        """Load an optional reward_fn(responses, labels) -> dict for per-step reward metrics."""
-        reward_fn_path = getattr(self.args.data, "custom_reward_fn", None)
-        if not reward_fn_path:
-            return None
-        reward_fn = runpy.run_path(reward_fn_path).get("reward_fn")
-        if not callable(reward_fn):
-            raise ValueError(
-                f"{reward_fn_path!r} must define a callable reward_fn(responses, labels)"
-            )
-        return reward_fn
-
         self.student_processor = get_tokenizer_or_processor(
             self.args.model.student_name_or_path,
             need_processor=self.image_key is not None,
@@ -45,6 +33,18 @@ class RolloutDataProcessor:
                 self.args.model.teacher_name_or_path,
                 need_processor=self.image_key is not None,
             )
+
+    def _load_reward_fn(self) -> Optional[Callable]:
+        """Load an optional reward_fn(responses, labels) -> dict for per-step reward metrics."""
+        reward_fn_path = getattr(self.args.data, "custom_reward_fn", None)
+        if not reward_fn_path:
+            return None
+        reward_fn = runpy.run_path(reward_fn_path).get("reward_fn")
+        if not callable(reward_fn):
+            raise ValueError(
+                f"{reward_fn_path!r} must define a callable reward_fn(responses, labels)"
+            )
+        return reward_fn
 
     def process(
         self,
