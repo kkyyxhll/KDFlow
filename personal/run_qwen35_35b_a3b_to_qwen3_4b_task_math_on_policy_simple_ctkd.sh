@@ -45,6 +45,7 @@ OPTS+=" --eval_top_p 0.7"
 # ============ DataArguments ============
 OPTS+=" --train_dataset_path ${EXP_DIR}/dapo-math-17k"
 OPTS+=" --eval_dataset_path ${EXP_DIR}/aime-2024"
+OPTS+=" --eval_split train"
 OPTS+=" --max_len 4096"
 OPTS+=" --input_key prompt"
 OPTS+=" --custom_eval_fn examples/evaluation/math_dapo_utils.py"
