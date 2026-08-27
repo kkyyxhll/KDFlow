@@ -46,7 +46,11 @@ class RolloutManager:
         if not prompt_batch:
             return [], {}
 
-        n_samples = self.args.rollout.n_samples_per_prompt if mode == "train" else 1
+        n_samples = (
+            self.args.rollout.n_samples_per_prompt
+            if mode == "train"
+            else self.args.eval.eval_n_samples_per_prompt
+        )
         if n_samples <= 0:
             raise ValueError(f"n_samples_per_prompt must be positive, got {n_samples}")
 

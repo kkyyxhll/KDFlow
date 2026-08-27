@@ -9,6 +9,7 @@ from kdflow.arguments.training_args import TrainingArguments
 from kdflow.arguments.fsdp_args import FSDPArguments
 from kdflow.arguments.distillation_args import DistillationArguments
 from kdflow.arguments.rollout_args import RolloutArguments
+from kdflow.arguments.eval_args import EvalArguments
 from kdflow.arguments.logging_args import LoggingArguments
 from kdflow.utils.logging_utils import init_logger
 
@@ -23,6 +24,7 @@ class AllArguments:
     fsdp: FSDPArguments = field(default_factory=FSDPArguments)
     kd: DistillationArguments = field(default_factory=DistillationArguments)
     rollout: RolloutArguments = field(default_factory=RolloutArguments)
+    eval: EvalArguments = field(default_factory=EvalArguments)
     log: LoggingArguments = field(default_factory=LoggingArguments)
     
 
@@ -44,6 +46,7 @@ def init_args(scenario: str = "sft"):
         FSDPArguments,
         DistillationArguments,
         RolloutArguments,
+        EvalArguments,
         LoggingArguments
     ))
     (
@@ -53,6 +56,7 @@ def init_args(scenario: str = "sft"):
         fsdp_args,
         kd_args, 
         rollout_args, 
+        eval_args,
         log_args
     ) = parser.parse_args_into_dataclasses()
 
@@ -63,6 +67,7 @@ def init_args(scenario: str = "sft"):
         fsdp=fsdp_args,
         kd=kd_args,
         rollout=rollout_args,
+        eval=eval_args,
         log=log_args
     )
     

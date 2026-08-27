@@ -301,7 +301,14 @@ class OnPolicyKDTrainer:
         if not eval_prompts:
             return {}
 
-        generate_kwargs = {**self.generate_kwargs, "temperature": 0.0}
+        generate_kwargs = {
+            "max_new_tokens": self.args.eval.eval_generate_max_len
+            or self.generate_kwargs["max_new_tokens"],
+        }
+        if self.args.eval.eval_temperature is not None:
+            generate_kwargs["temperature"] = self.args.eval.eval_temperature
+        if self.args.eval.eval_top_p is not None:
+            generate_kwargs["top_p"] = self.args.eval.eval_top_p
         rollout_samples, rollout_metrics = self.rollout_manager.rollout(
             eval_prompts,
             global_step=self.global_step,
