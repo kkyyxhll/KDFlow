@@ -234,22 +234,27 @@ class RolloutDataProcessor:
     def _fix_teacher_think_boundary(tea_prompt: str, response_text: str) -> str:
         """Fix malformed <think> block at the teacher-prompt/response junction.
 
+        Returns the adjusted teacher prompt; the response is always kept verbatim
+        so the teacher-side label sequence stays textually identical to the
+        student's, preserving token-level alignment in KD.
+
         When the teacher chat template force-opens a <think> block (e.g. Qwen3.5)
         but the student's does not (e.g. Qwen3), the student response starts with
-        its own <think>, yielding a nested "<think>\n<think>" after concatenation;
-        strip the redundant opening tag from the response. Conversely, when the
-        student template force-opens <think> (so the response contains </think>
-        but no opening tag) while the teacher's does not, prepend the missing tag.
+        its own <think>, which would nest after concatenation ("<think>\n<think>");
+        drop the teacher-side opening tag and let the response's own <think>
+        complete the block. Conversely, when the student template force-opens
+        <think> (so the response contains </think> but no opening tag) while the
+        teacher's does not, append the opening tag to the teacher prompt.
         """
-        if tea_prompt.endswith("<think>\n") and response_text.startswith("<think>\n"):
-            return response_text[len("<think>\n"):]
+        if tea_prompt.endswith("<think>\n") and response_text.startswith("<think>"):
+            return tea_prompt[: -len("<think>\n")]
         if (
             not response_text.startswith("<think>")
             and "</think>" in response_text
             and not tea_prompt.endswith("<think>\n")
         ):
-            return "<think>\n" + response_text
-        return response_text
+            return tea_prompt + "<think>\n"
+        return tea_prompt
 
     def _build_rollout_sample(
         self,
@@ -274,16 +279,15 @@ class RolloutDataProcessor:
 
         if not self.is_same_tokenizer or tea_prompt != stu_prompt:
             teacher_processor = self._get_teacher_processor(teacher_routing_key)
-            tea_response_text = self._fix_teacher_think_boundary(tea_prompt, response_text)
+            tea_prompt = self._fix_teacher_think_boundary(tea_prompt, response_text)
             tea_tokens = self._tokenize_sample(
                 tea_prompt,
-                tea_response_text,
+                response_text,
                 teacher_processor,
                 "tea",
                 images=images,
             )
         else:
-            tea_response_text = response_text
             tea_tokens = {
                 "tea_input_ids": stu_tokens["stu_input_ids"].clone(),
                 "tea_attn_mask": stu_tokens["stu_attn_mask"].clone(),
@@ -298,7 +302,7 @@ class RolloutDataProcessor:
         tokenizer = getattr(teacher_processor, "tokenizer", teacher_processor)
         if images:
             feed_ids = tokenizer(
-                tea_prompt + tea_response_text, add_special_tokens=False
+                tea_prompt + response_text, add_special_tokens=False
             )["input_ids"]
             tea_feed_input_ids = feed_ids + [tokenizer.eos_token_id]
         else:
