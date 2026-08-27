@@ -14,6 +14,10 @@ class LoggingArguments:
         default=False,
         metadata={"help": "Use wandb for logging."}
     )
+    sync_swanlab: bool = field(
+        default=False,
+        metadata={"help": "Sync wandb metrics to swanlab."}
+    )
     wandb_org: str = field(
         default=None
     )

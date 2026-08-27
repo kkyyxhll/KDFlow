@@ -57,6 +57,10 @@ class SFTTrainer:
         if self.args.log.use_wandb and dist.get_rank() == 0:
             import wandb
 
+            if self.args.log.sync_swanlab:
+                import swanlab
+                swanlab.sync_wandb(wandb_run=False)
+
             self._wandb = wandb
             if self.args.log.wandb_mode != "offline" and not wandb.api.api_key:
                 wandb.login()
