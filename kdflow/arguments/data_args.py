@@ -33,6 +33,14 @@ class DataArguments:
                     "which must return a metric dict (only supported in on-policy KD)."
         }
     )
+    custom_reward_fn: str = field(
+        default=None,
+        metadata={
+            "help": "Optional Python file defining reward_fn(responses, labels), "
+                    "which must return a metric dict. Called after each training "
+                    "rollout to log per-step reward metrics (only supported in on-policy KD)."
+        }
+    )
     input_key: str = field(
         default="messages",
         metadata={"help": "JSON dataset key."}
