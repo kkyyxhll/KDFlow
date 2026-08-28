@@ -5,6 +5,7 @@ from kdflow.algorithms import register_algorithm
 from kdflow.loss.chunked_loss import chunked_loss
 from kdflow.loss.cross_entropy import compute_cross_entropy
 from kdflow.metrics.entropy import compute_entropy
+from kdflow.metrics.eopd import compute_eopd_metrics
 from kdflow.utils.logging_utils import init_logger
 
 
@@ -34,6 +35,12 @@ class SimpleCrossTokenizerKD:
         self.loss_fn = build_loss_fn(self.args.kd.kd_loss_fn, self.args)
         # certain metrics will be recorded during training
         self.metric_fns = [compute_entropy] if self.args.scenario == "on_policy_kd" else []
+        if self.args.kd.kd_loss_fn == "entropy_gated_kl":
+            self.metric_fns.append(
+                lambda **kw: compute_eopd_metrics(
+                    entropy_tau=self.args.kd.entropy_tau, **kw
+                )
+            )
         
     def _find_overlap_tokens(self):
         student_vocab = {k.replace("Ġ", "▁"): v for k, v in self.student_tokenizer.get_vocab().items()}

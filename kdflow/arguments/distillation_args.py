@@ -97,6 +97,11 @@ class DistillationArguments:
         default=0.5,
         metadata={"help": "Beta for Jensen-Shannon Divergence."}
     )
+    # Entropy-gated KL (EOPD)
+    entropy_tau: float = field(
+        default=0.8,
+        metadata={"help": "Teacher entropy threshold for entropy_gated_kl. Positions with teacher entropy >= tau use forward KL, others use reverse KL."}
+    )
     # Skewed KL/RKL
     skew_lambda: float = field(
         default=0.1,

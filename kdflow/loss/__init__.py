@@ -34,6 +34,7 @@ def build_loss_fn(name, args):
         "srkl":        {"skew_lambda": kd.skew_lambda},
         "akl":         {"adaptive_kl_alpha": kd.adaptive_alpha},
         "hrl":         {"hrl_topk": kd.hrl_topk},
+        "entropy_gated_kl": {"entropy_tau": kd.entropy_tau},
     }
 
     return partial(fn, **common, **extra_params.get(name, {}))
