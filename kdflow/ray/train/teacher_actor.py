@@ -65,6 +65,7 @@ class TeacherRayActor:
             pp_size=self.pp_size,
             chunked_prefill_size=-1,  # Disable chunked prefill for full sequence processing
             disable_radix_cache=True,  # Disable cache for deterministic behavior
+            disable_cuda_graph=True,  # Prefill-only; skip graph capture to save memory
             enable_return_hidden_states=True,  # Enable hidden states extraction
             enable_memory_saver=True,  # Enable memory saving mode
             enable_weights_cpu_backup=True,  # Backup weights to CPU for memory release

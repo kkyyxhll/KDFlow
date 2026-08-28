@@ -44,6 +44,7 @@ class EngineConfig:
     pp_size: int = 1
     chunked_prefill_size: int = -1
     disable_radix_cache: bool = True
+    disable_cuda_graph: bool = False
     enable_return_hidden_states: bool = True
     enable_memory_saver: bool = True
     enable_weights_cpu_backup: bool = True
@@ -72,6 +73,7 @@ def _engine_worker(config: EngineConfig, request_queue: Queue, response_queue: Q
             pp_size=config.pp_size,
             chunked_prefill_size=config.chunked_prefill_size,
             disable_radix_cache=config.disable_radix_cache,
+            disable_cuda_graph=config.disable_cuda_graph,
             enable_return_hidden_states=config.enable_return_hidden_states,
             enable_memory_saver=config.enable_memory_saver,
             enable_weights_cpu_backup=config.enable_weights_cpu_backup,
